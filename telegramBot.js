@@ -2,8 +2,8 @@ const { Bot, InlineKeyboard, session } = require('grammy');
 const { conversations, createConversation } = require('@grammyjs/conversations');
 const { Menu } = require('@grammyjs/menu');
 const database = require('./database');
-const SolanaService = require('./services/solanaService');
-const HeliusService = require('./services/heliusService');
+const SolanaService = require('./solanaService');
+const HeliusService = require('./heliusService');
 
 class TelegramBot {
     constructor() {
