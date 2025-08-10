@@ -1,5 +1,5 @@
 const SolanaService = require('./solanaService');
-const database = require('../database');
+const database = require('./database');
 const Bottleneck = require('bottleneck');
 
 class TradingEngine {
