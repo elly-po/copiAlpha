@@ -1,6 +1,6 @@
 const express = require('express');
-const HeliusService = require('./services/heliusService');
-const TradingEngine = require('./services/tradingEngine');
+const HeliusService = require('./heliusService');
+const TradingEngine = require('./tradingEngine');
 const Bottleneck = require('bottleneck');
 
 class WebhookServer {
