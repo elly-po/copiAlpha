@@ -115,8 +115,8 @@ class TelegramBot {
 
         // Register menus with the bot
         this.bot.use(this.mainMenu);
-       this.bot.use(this.alphaMenu);
-    this.bot.use(this.settingsMenu);
+        this.bot.use(this.alphaMenu);
+        this.bot.use(this.settingsMenu);
     }
 
     setupHandlers() {
