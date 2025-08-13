@@ -155,9 +155,7 @@ class TelegramBot {
                             await this.showMainMenu(ctx);
                         }
                         break;
-                }
-            } catch (error) {
-                console.error("Error handling callback query:", error);
+                }error("Error handling callback query:", error);
                 await ctx.answerCallbackQuery(
                     "❌ Something went wrong. Please try again.",
                 );
@@ -180,6 +178,12 @@ class TelegramBot {
             console.error("Error initializing user:", error);
             await ctx.reply("❌ Error initializing user. Please try again.");
         }
+    }
+    async ensureUserSession(ctx) {
+        if (!ctx.session.user) {
+            await this.initUser(ctx); //fetchdb
+        }
+        return ctx.session.user;
     }
 
     async showWelcome(ctx) {
@@ -424,10 +428,11 @@ class TelegramBot {
     }
 
     async handleAlphaWallets(ctx) {
+        const user = await this.ensureUserSession(ctx);
         await this.deleteMessage(ctx);
 
         const alphaWallets = await database.getAlphaWallets(
-            ctx.session.user.id,
+            user.id,
         );
 
         let message = "🎯 <b>Alpha Wallets Management</b>\n\n";
@@ -452,9 +457,8 @@ class TelegramBot {
     }
 
     async handleSettings(ctx) {
+        const user = await this.ensureUserSession(ctx);
         await this.deleteMessage(ctx);
-
-        const user = await database.getUser(ctx.from.id);
 
         const message = `
 ⚙️ <b>Trading Settings</b>
@@ -475,9 +479,10 @@ class TelegramBot {
     }
 
     async handleMyTrades(ctx) {
+        const user = await this.ensureUserSession(ctx);
         await this.deleteMessage(ctx);
 
-        const trades = await database.getUserTrades(ctx.session.user.id, 10);
+        const trades = await database.getUserTrades(user.id, 10);
 
         let message = "📊 <b>Recent Trades</b>\n\n";
 
@@ -504,9 +509,9 @@ class TelegramBot {
     }
 
     async handlePortfolio(ctx) {
+        const user = await this.ensureUserSession(ctx);
         await this.deleteMessage(ctx);
 
-        const user = await database.getUser(ctx.from.id);
         if (!user.wallet_address) {
             await ctx.reply("❌ Please connect your wallet first.");
             return;
@@ -568,16 +573,20 @@ class TelegramBot {
 📞 <b>Support:</b> Contact @YourSupport
         `;
 
-        await ctx.reply(helpText, { parse_mode: "HTML" });
+        await ctx.reply(helpText, {
+            parse_mode: "HTML",
+            reply_markup: new InlineKeyboard()
+                .text("🔄 Refresh","portfolio")
+                .text("🔙 Back", "main_menu"),
+        });
     }
 
     async handleStatus(ctx) {
         try {
             await this.deleteMessage(ctx);
-
-            const user = await database.getUser(ctx.from.id);
-            const alphaWallets = await database.getAlphaWallets(user?.id || 0);
-            const recentTrades = await database.getUserTrades(user?.id || 0, 5);
+            const user = await this.ensureUserSession(ctx);
+            const alphaWallets = await database.getAlphaWallets(user.id);
+            const recentTrades = await database.getUserTrades(user.id, 5);
 
             let walletBalance = 0;
             if (user?.wallet_address) {
@@ -631,10 +640,10 @@ class TelegramBot {
         try {
             await this.deleteMessage(ctx);
 
-            const user = await database.getUser(ctx.from.id);
+            const user = await this.ensureUserSession(ctx);
             const newValue = user.auto_sell_enabled ? 0 : 1;
 
-            await database.updateUser(ctx.from.id, {
+            await database.updateUser(user.id, {
                 auto_sell_enabled: newValue,
             });
 
@@ -663,10 +672,8 @@ class TelegramBot {
 
     async showAlphaWallets(ctx) {
         await this.deleteMessage(ctx);
-
-        const alphaWallets = await database.getAlphaWallets(
-            ctx.session.user.id,
-        );
+        const user = await this.ensureUserSession(ctx);
+        const alphaWallets = await database.getAlphaWallets(user.id);
 
         if (alphaWallets.length === 0) {
             await ctx.reply(
@@ -705,10 +712,8 @@ class TelegramBot {
 
     async handleRemoveAlpha(ctx) {
         await this.deleteMessage(ctx);
-
-        const alphaWallets = await database.getAlphaWallets(
-            ctx.session.user.id,
-        );
+        const user = await this.ensureUserSession(ctx);
+        const alphaWallets = await database.getAlphaWallets(user.id);
 
         if (alphaWallets.length === 0) {
             await ctx.reply("📭 No alpha wallets to remove.", {
@@ -752,8 +757,9 @@ class TelegramBot {
 
     async removeAlphaWallet(ctx, walletId) {
         try {
+            const user = await this.ensureUserSession(ctx);
             await database.deleteAlphaWallet(walletId);
-            await this.updateUserWebhooks(ctx.session.user.id);
+            await this.updateUserWebhooks(user.id);
 
             await this.deleteMessage(ctx);
             await ctx.reply(
