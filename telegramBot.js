@@ -57,15 +57,42 @@ class TelegramBot {
             .text("👛 Connect Wallet", (ctx) =>
                 ctx.conversation.enter("wallet"),
             )
-            .text("🎯 Add Alpha Wallets", (ctx) => this.handleAlphaWallets(ctx))
+            .text("🎯 Add Alpha Wallets", async (ctx) => {
+                await this.deleteMessage(ctx);
+                const user = await this.ensureUserSession(ctx);
+                await ctx.reply("🎯 <b>Alpha Wallets Management</b>", {
+                    parse_mode: "HTML",
+                    reply_markup: new InlineKeyboard()
+                        .text("➕ Add New Wallet", "alpha_add")
+                        .text("📋 View All Wallets", "view_alpha")
+                        .row()
+                        .text("🗑️ Remove Wallet", "remove_select")
+                        .text("🔙 Back", "main_menu"),
+                });
+            })
             .row()
-            .text("⚙️ Trading Settings", (ctx) => this.handleSettings(ctx))
+            .text("⚙️ Trading Settings", async (ctx) => {
+                await this.deleteMessage(ctx);
+                const user = await this.ensureUserSession(ctx);
+                await ctx.reply("⚙️ <b>Trading Settings</b>", {
+                    parse_mode: "HTML",
+                    reply_markup: new InlineKeyboard()
+                        .text("💰 Max Trade Amount", async (ctx) => {await this.handleMaxAmount(ctx);})
+                        .text("📈 Slippage %", async (ctx) => {await this.handleSlippage(ctx);})
+                        .row()
+                        .text("🎯 Take Profit %", async (ctx) => {await this.handleTakeProfit(ctx);})
+                        .text("🛑 Stop Loss %", async (ctx) => {await this.handleStopLoss(ctx);})
+                        .row()
+                        .text("🤖 Auto-Sell Toggle", async (ctx) => {await this.toggleAutoSell(ctx);})
+                        .text("🔙 Back", "main_menu"),
+                });
+            })
             .text("📊 My Trades", (ctx) => this.handleMyTrades(ctx))
             .row()
             .text("💰 Portfolio", (ctx) => this.handlePortfolio(ctx))
             .text("❓ Help", (ctx) => this.handleHelp(ctx));
 
-        // Alpha wallets menu
+        // Alpha wallets menu (used in "View All" / "Remove" flows)
         this.alphaMenu = new Menu("alpha")
             .text("➕ Add New Wallet", (ctx) =>
                 ctx.conversation.enter("alphaWallet"),
@@ -75,7 +102,7 @@ class TelegramBot {
             .text("🗑️ Remove Wallet", (ctx) => this.handleRemoveAlpha(ctx))
             .text("🔙 Back", (ctx) => this.showMainMenu(ctx));
 
-        // Settings menu
+        // Settings menu (used for conversation handlers)
         this.settingsMenu = new Menu("settings")
             .text("💰 Max Trade Amount", (ctx) => this.handleMaxAmount(ctx))
             .text("📈 Slippage %", (ctx) => this.handleSlippage(ctx))
@@ -86,6 +113,7 @@ class TelegramBot {
             .text("🤖 Auto-Sell Toggle", (ctx) => this.toggleAutoSell(ctx))
             .text("🔙 Back", (ctx) => this.showMainMenu(ctx));
 
+        // Register menus with the bot
         this.bot.use(this.mainMenu);
         this.bot.use(this.alphaMenu);
         this.bot.use(this.settingsMenu);
@@ -113,7 +141,6 @@ class TelegramBot {
     setupCallbackHandlers() {
         this.bot.on("callback_query", async (ctx) => {
             const data = ctx.callbackQuery.data;
-
             try {
                 await ctx.answerCallbackQuery();
 
@@ -155,9 +182,11 @@ class TelegramBot {
                             await this.showMainMenu(ctx);
                         }
                         break;
-                }error("Error handling callback query:", error);
+                }
+            } catch (error) {
+                console.error("Error handling callback query:", error);
                 await ctx.answerCallbackQuery(
-                    "❌ Something went wrong. Please try again.",
+                    "❌ Something went wrong. Please try again."
                 );
             }
         });
@@ -299,6 +328,7 @@ class TelegramBot {
     }
 
     async alphaWalletConversation(conversation, ctx) {
+        await this.deleteMessage(ctx);
         await ctx.reply(
             "🎯 <b>Add Alpha Wallet</b>\n\n" +
                 "📝 Send wallet address(es) to track:\n" +
@@ -308,17 +338,19 @@ class TelegramBot {
                 "💡 <b>Tip:</b> Add a nickname after address: <code>ADDRESS:nickname</code>",
             {
                 parse_mode: "HTML",
-                reply_markup: new InlineKeyboard().text("❌ Cancel", "cancel"),
+                reply_markup: new InlineKeyboard().text("🔙 Back", "alpha_wallets"),
             },
         );
 
-        const response = await conversation.wait();
+        const response = await conversation.waitFor([
+            "message:text",
+            "callback_query:data",
+        ]);
 
-        if (response.callbackQuery?.data === "cancel") {
-            await ctx.reply("❌ Adding alpha wallet cancelled.");
-            return;
+        if (response.callbackQuery?.data === "alpha_wallets") {
+        return;
         }
-
+        
         const input = response.message?.text?.trim();
         if (!input) {
             await ctx.reply("❌ Please provide wallet address(es).");
@@ -372,6 +404,7 @@ class TelegramBot {
     }
 
     async settingsConversation(conversation, ctx) {
+        await this.deleteMessage(ctx);
         const settingType = ctx.session.tempData.settingType;
 
         const prompts = {
@@ -546,6 +579,7 @@ class TelegramBot {
     }
 
     async handleHelp(ctx) {
+        await this.deleteMessage(ctx);
         const helpText = `
 ❓ <b>Copy Trading Bot Help</b>
 
@@ -781,21 +815,25 @@ class TelegramBot {
 
     async handleMaxAmount(ctx) {
         ctx.session.tempData.settingType = "maxAmount";
+        await this.deleteMessage(ctx);
         await ctx.conversation.enter("settings");
     }
 
     async handleSlippage(ctx) {
         ctx.session.tempData.settingType = "slippage";
+        await this.deleteMessage(ctx);
         await ctx.conversation.enter("settings");
     }
 
     async handleTakeProfit(ctx) {
         ctx.session.tempData.settingType = "takeProfit";
+        await this.deleteMessage(ctx);
         await ctx.conversation.enter("settings");
     }
 
     async handleStopLoss(ctx) {
         ctx.session.tempData.settingType = "stopLoss";
+        await this.deleteMessage(ctx);
         await ctx.conversation.enter("settings");
     }
 
