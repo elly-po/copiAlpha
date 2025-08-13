@@ -93,14 +93,14 @@ class TelegramBot {
             .text("❓ Help", (ctx) => this.handleHelp(ctx));
 
         // Alpha wallets menu (used in "View All" / "Remove" flows)
-        this.alphaMenu = new Menu("alpha")
+        /*this.alphaMenu = new Menu("alpha")
             .text("➕ Add New Wallet", (ctx) =>
                 ctx.conversation.enter("alphaWallet"),
             )
             .text("📋 View All Wallets", (ctx) => this.showAlphaWallets(ctx))
             .row()
             .text("🗑️ Remove Wallet", (ctx) => this.handleRemoveAlpha(ctx))
-            .text("🔙 Back", (ctx) => this.showMainMenu(ctx));
+            .text("🔙 Back", (ctx) => this.showMainMenu(ctx));*/
 
         // Settings menu (used for conversation handlers)
         this.settingsMenu = new Menu("settings")
@@ -115,8 +115,8 @@ class TelegramBot {
 
         // Register menus with the bot
         this.bot.use(this.mainMenu);
-        this.bot.use(this.alphaMenu);
-        this.bot.use(this.settingsMenu);
+       this.bot.use(this.alphaMenu);
+    this.bot.use(this.settingsMenu);
     }
 
     setupHandlers() {
