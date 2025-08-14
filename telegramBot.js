@@ -77,13 +77,13 @@ class TelegramBot {
                 await ctx.reply("⚙️ <b>Trading Settings</b>", {
                     parse_mode: "HTML",
                     reply_markup: new InlineKeyboard()
-                        .text("💰 Max Trade Amount", async (ctx) => {await this.handleMaxAmount(ctx);})
-                        .text("📈 Slippage %", async (ctx) => {await this.handleSlippage(ctx);})
+                        .text("💰 Max Trade Amount", "settings_maxAmount")
+                        .text("📈 Slippage %", "settings_slippage")
                         .row()
-                        .text("🎯 Take Profit %", async (ctx) => {await this.handleTakeProfit(ctx);})
-                        .text("🛑 Stop Loss %", async (ctx) => {await this.handleStopLoss(ctx);})
+                        .text("🎯 Take Profit %", "settings_takeprofit")
+                        .text("🛑 Stop Loss %", "settings_stoploss")
                         .row()
-                        .text("🤖 Auto-Sell Toggle", async (ctx) => {await this.toggleAutoSell(ctx);})
+                        .text("🤖 Auto-Sell Toggle", "autoselltoggle")
                         .text("🔙 Back", "main_menu"),
                 });
             })
@@ -93,14 +93,14 @@ class TelegramBot {
             .text("❓ Help", (ctx) => this.handleHelp(ctx));
 
         // Alpha wallets menu (used in "View All" / "Remove" flows)
-        /*this.alphaMenu = new Menu("alpha")
+        this.alphaMenu = new Menu("alpha")
             .text("➕ Add New Wallet", (ctx) =>
                 ctx.conversation.enter("alphaWallet"),
             )
             .text("📋 View All Wallets", (ctx) => this.showAlphaWallets(ctx))
             .row()
             .text("🗑️ Remove Wallet", (ctx) => this.handleRemoveAlpha(ctx))
-            .text("🔙 Back", (ctx) => this.showMainMenu(ctx));*/
+            .text("🔙 Back", (ctx) => this.showMainMenu(ctx));
 
         // Settings menu (used for conversation handlers)
         this.settingsMenu = new Menu("settings")
@@ -157,6 +157,21 @@ class TelegramBot {
                     case "settings":
                         await this.handleSettings(ctx);
                         break;
+                    case "settings_maxAmount":
+                        await this.handleSettings(ctx);
+                        break;
+                    case "settings_slippage":
+                        await this.handleSettings(ctx);
+                        break;
+                    case "settings_takeprofit":
+                        await this.handleSettings(ctx);
+                        break;
+                    case "settings_stoploss":
+                        await this.handleSettings(ctx);
+                        break;
+                    case "autoselltoggle":
+                        await this.handleSettings(ctx);
+                        break;
                     case "portfolio":
                         await this.handlePortfolio(ctx);
                         break;
@@ -165,6 +180,9 @@ class TelegramBot {
                         break;
                     case "remove_select":
                         await this.handleRemoveAlpha(ctx);
+                        break;
+                    case "help":
+                        await this.handleHelp(ctx);
                         break;
                     case "status_refresh":
                         await this.handleStatus(ctx);
@@ -261,6 +279,7 @@ class TelegramBot {
     }
 
     async walletConversation(conversation, ctx) {
+        await this.deleteMessage(ctx);
         await ctx.reply(
             "🔐 <b>Connect Your Solana Wallet</b>\n\n" +
                 "⚠️ <b>SECURITY WARNING:</b>\n" +
@@ -270,17 +289,16 @@ class TelegramBot {
                 "📝 Please send your wallet private key (base58 format):",
             {
                 parse_mode: "HTML",
-                reply_markup: new InlineKeyboard().text("❌ Cancel", "cancel"),
+                reply_markup: new InlineKeyboard().text("🔙 Back", "main_menu"),
             },
         );
 
-        const response = await conversation.wait();
+        const response = await conversation.waitFor([
+            "message:text",
+            "callback_query:data",
+        ]);
 
-        if (
-            response.message?.text === "/cancel" ||
-            response.callbackQuery?.data === "cancel"
-        ) {
-            await ctx.reply("❌ Wallet connection cancelled.");
+        if (response.callbackQuery?.data === "main_menu") {
             return;
         }
 
@@ -348,7 +366,7 @@ class TelegramBot {
         ]);
 
         if (response.callbackQuery?.data === "alpha_wallets") {
-        return;
+            return;
         }
         
         const input = response.message?.text?.trim();
@@ -415,13 +433,15 @@ class TelegramBot {
         };
 
         await ctx.reply(prompts[settingType] || "⚙️ Enter new value:", {
-            reply_markup: new InlineKeyboard().text("❌ Cancel", "cancel"),
+            reply_markup: new InlineKeyboard().text("🔙 back", "settings"),
         });
 
-        const response = await conversation.wait();
+        const response = await conversation.waitFor([
+            "message:text",
+            "callback_query:data",
+        ]);
 
-        if (response.callbackQuery?.data === "cancel") {
-            await ctx.reply("❌ Setting update cancelled.");
+        if (response.callbackQuery?.data === "settings") {
             return;
         }
 
@@ -610,7 +630,7 @@ class TelegramBot {
         await ctx.reply(helpText, {
             parse_mode: "HTML",
             reply_markup: new InlineKeyboard()
-                .text("🔄 Refresh","portfolio")
+                .text("🔄 Refresh","help")
                 .text("🔙 Back", "main_menu"),
         });
     }
