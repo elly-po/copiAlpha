@@ -74,6 +74,7 @@ class TelegramBot {
             .text("⚙️ Trading Settings", async (ctx) => {
                 await this.deleteMessage(ctx);
                 const user = await this.ensureUserSession(ctx);
+                });
                 await ctx.reply("⚙️ <b>Trading Settings</b>", {
                     parse_mode: "HTML",
                     reply_markup: new InlineKeyboard()
@@ -92,7 +93,7 @@ class TelegramBot {
             .text("💰 Portfolio", (ctx) => this.handlePortfolio(ctx))
             .text("❓ Help", (ctx) => this.handleHelp(ctx));
 
-        // Alpha wallets menu (used in "View All" / "Remove" flows)
+
         this.alphaMenu = new Menu("alpha")
             .text("➕ Add New Wallet", (ctx) =>
                 ctx.conversation.enter("alphaWallet"),
