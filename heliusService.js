@@ -1,3 +1,4 @@
+// heliusService.js
 const axios = require('axios');
 const Bottleneck = require('bottleneck');
 
@@ -5,7 +6,7 @@ class HeliusService {
     constructor() {
         this.apiKey = process.env.HELIUS_API_KEY;
         this.baseUrl = process.env.HELIUS_WEBHOOK_URL;
-        this.webhookUrl = `http://localhost:${process.env.WEBHOOK_PORT}/webhook`;
+        this.webhookUrl = `https://e0e22f03-f254-46ee-8d3a-1c5568cf6c98-00-2s5y4moat23yo.kirk.replit.dev/webhook`;
         
         // Rate limiter for Helius API calls (free tier: 100 req/min)
         this.limiter = new Bottleneck({
@@ -14,76 +15,105 @@ class HeliusService {
         });
     }
 
-    async createWebhook(walletAddresses, userId) {
-        try {
-            const webhookData = {
-                webhookURL: this.webhookUrl,
-                transactionTypes: ['Any'],
-                accountAddresses: walletAddresses,
-                webhookType: 'enhanced'
-            };
+    logWithTimestamp(...args) {
+        console.log(new Date().toISOString(), ...args);
+    }
 
+    async createWebhook(walletAddresses, userId) {
+        // First check if webhook already exists
+        const existingWebhooks = await this.getWebhooks();
+        const existing = existingWebhooks.find(
+            w => w.webhookURL === this.webhookUrl
+        );
+
+        if (existing) {
+            this.logWithTimestamp(
+                `ℹ️ Found existing webhook ${existing.webhookID}, updating instead of creating...`
+            );
+            return await this.updateWebhook(existing.webhookID, walletAddresses);
+        }
+
+        // If no existing webhook found, create a new one
+        const webhookData = {
+            webhookURL: this.webhookUrl,
+            transactionTypes: ['Any'],
+            accountAddresses: walletAddresses,
+            webhookType: 'enhanced'
+        };
+        this.logWithTimestamp(`Creating webhook for user ${userId} with addresses:`, walletAddresses);
+        this.logWithTimestamp('Webhook payload:', JSON.stringify(webhookData));
+
+        try {
             const response = await this.limiter.schedule(() =>
                 axios.post(`${this.baseUrl}?api-key=${this.apiKey}`, webhookData)
             );
+            console.log('Helius response:', response.data);
 
-            console.log('Webhook created:', response.data);
+            this.logWithTimestamp('Webhook created successfully:', JSON.stringify(response.data));
+            console.log('✅ Helius webhook created. Waiting for data...');
             return response.data;
         } catch (error) {
-            console.error('Error creating webhook:', error.response?.data || error.message);
+            console.log('Helius response error:', error.response?.data || error.message);
+            this.logWithTimestamp('Error creating webhook:', error.response?.data || error.message);
             return null;
         }
     }
 
     async updateWebhook(webhookId, walletAddresses) {
-        try {
-            const updateData = {
-                webhookURL: this.webhookUrl,
-                transactionTypes: ['Any'],
-                accountAddresses: walletAddresses,
-                webhookType: 'enhanced'
-            };
+        const updateData = {
+            webhookURL: this.webhookUrl,
+            transactionTypes: ['Any'],
+            accountAddresses: walletAddresses,
+            webhookType: 'enhanced'
+        };
+        this.logWithTimestamp(`Updating webhook ${webhookId} with addresses:`, walletAddresses);
+        this.logWithTimestamp('Update payload:', JSON.stringify(updateData));
 
+        try {
             const response = await this.limiter.schedule(() =>
                 axios.put(`${this.baseUrl}/${webhookId}?api-key=${this.apiKey}`, updateData)
             );
 
-            console.log('Webhook updated:', response.data);
+            this.logWithTimestamp('Webhook updated successfully:', JSON.stringify(response.data));
             return response.data;
         } catch (error) {
-            console.error('Error updating webhook:', error.response?.data || error.message);
+            this.logWithTimestamp('Error updating webhook:', error.response?.data || error.message);
             return null;
         }
     }
 
     async deleteWebhook(webhookId) {
+        this.logWithTimestamp(`Deleting webhook ${webhookId}`);
         try {
-            const response = await this.limiter.schedule(() =>
+            await this.limiter.schedule(() =>
                 axios.delete(`${this.baseUrl}/${webhookId}?api-key=${this.apiKey}`)
             );
 
-            console.log('Webhook deleted:', webhookId);
+            this.logWithTimestamp('Webhook deleted:', webhookId);
             return true;
         } catch (error) {
-            console.error('Error deleting webhook:', error.response?.data || error.message);
+            this.logWithTimestamp('Error deleting webhook:', error.response?.data || error.message);
             return false;
         }
     }
 
     async getWebhooks() {
+        this.logWithTimestamp('Fetching all webhooks');
         try {
             const response = await this.limiter.schedule(() =>
                 axios.get(`${this.baseUrl}?api-key=${this.apiKey}`)
             );
 
+            this.logWithTimestamp(`Fetched ${response.data.length} webhooks`);
             return response.data;
         } catch (error) {
-            console.error('Error getting webhooks:', error.response?.data || error.message);
+            this.logWithTimestamp('Error getting webhooks:', error.response?.data || error.message);
             return [];
         }
     }
 
     processWebhookData(webhookData) {
+        this.logWithTimestamp('Processing webhook data:', JSON.stringify(webhookData));
         try {
             const transactions = webhookData.map(tx => ({
                 signature: tx.signature,
@@ -98,27 +128,28 @@ class HeliusService {
                 events: tx.events || {}
             }));
 
+            this.logWithTimestamp(`Processed ${transactions.length} transactions from webhook data`);
             return transactions;
         } catch (error) {
-            console.error('Error processing webhook data:', error);
+            this.logWithTimestamp('Error processing webhook data:', error);
             return [];
         }
     }
 
     isSwapTransaction(transaction) {
-        // Check if transaction contains swap-related instructions
         const swapPrograms = [
             'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', // Jupiter
             '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium
             '9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP'  // Orca
         ];
 
-        return transaction.instructions.some(ix => 
-            swapPrograms.includes(ix.programId)
-        );
+        const isSwap = transaction.instructions.some(ix => swapPrograms.includes(ix.programId));
+        this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction`);
+        return isSwap;
     }
 
     extractSwapDetails(transaction) {
+        this.logWithTimestamp(`Extracting swap details from transaction: ${transaction.signature}`);
         try {
             const swapDetails = {
                 signature: transaction.signature,
@@ -139,7 +170,6 @@ class HeliusService {
                 }
             });
 
-            // Determine buy/sell based on token changes
             const positiveChanges = swapDetails.tokenChanges.filter(c => parseFloat(c.rawTokenAmount) > 0);
             const negativeChanges = swapDetails.tokenChanges.filter(c => parseFloat(c.rawTokenAmount) < 0);
 
@@ -149,9 +179,10 @@ class HeliusService {
             swapDetails.amountIn = Math.abs(parseFloat(negativeChanges[0]?.tokenAmount || 0));
             swapDetails.amountOut = Math.abs(parseFloat(positiveChanges[0]?.tokenAmount || 0));
 
+            this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
             return swapDetails;
         } catch (error) {
-            console.error('Error extracting swap details:', error);
+            this.logWithTimestamp('Error extracting swap details:', error);
             return null;
         }
     }
