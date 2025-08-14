@@ -74,7 +74,6 @@ class TelegramBot {
             .text("⚙️ Trading Settings", async (ctx) => {
                 await this.deleteMessage(ctx);
                 const user = await this.ensureUserSession(ctx);
-                });
                 await ctx.reply("⚙️ <b>Trading Settings</b>", {
                     parse_mode: "HTML",
                     reply_markup: new InlineKeyboard()
