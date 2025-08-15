@@ -15,10 +15,12 @@ class WebhookServer {
         this.heliusService = new HeliusService();
         this.tradingEngine = new TradingEngine(bot);
 
-        // Path for saving raw webhook data
-        this.heliusLogPath = path.join(__dirname, 'helius_data.log');
+        // Ensure data folder exists
+        this.dataFolder = path.join(__dirname, 'data');
+        if (!fs.existsSync(this.dataFolder)) fs.mkdirSync(this.dataFolder);
 
-        // Rate limiter for webhook processing
+        this.heliusLogPath = path.join(this.dataFolder, 'helius_data.log');
+
         this.webhookLimiter = new Bottleneck({
             maxConcurrent: 5,
             minTime: 100
@@ -33,13 +35,10 @@ class WebhookServer {
     }
 
     logHeliusData(payload) {
-        const entry = {
-            timestamp: new Date().toISOString(),
-            data: payload
-        };
+        const entry = { timestamp: new Date().toISOString(), data: payload };
         try {
             fs.appendFileSync(this.heliusLogPath, JSON.stringify(entry) + '\n');
-            this.logWithTimestamp('📁 Helius payload logged to file');
+            this.logWithTimestamp('📁 Helius payload logged to file:', this.heliusLogPath);
         } catch (err) {
             this.logWithTimestamp('❌ Error writing to helius_data.log:', err);
         }
@@ -49,7 +48,6 @@ class WebhookServer {
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true }));
 
-        // Basic webhook validation
         this.app.use('/webhook', (req, res, next) => {
             const webhookSecret = req.headers['x-webhook-secret'];
             if (webhookSecret !== process.env.WEBHOOK_SECRET) {
@@ -62,39 +60,26 @@ class WebhookServer {
     }
 
     setupRoutes() {
-        // Health check endpoint
         this.app.get('/health', (req, res) => {
             this.logWithTimestamp('Health check requested');
             res.json({ status: 'OK', timestamp: new Date().toISOString() });
         });
 
-        // Main webhook endpoint for Helius
         this.app.post('/webhook', async (req, res) => {
-            this.logWithTimestamp('Webhook POST /webhook received:', JSON.stringify(req.body));
-
-            // Save raw payload to file for later analysis
+            this.logWithTimestamp('Webhook POST /webhook received');
             this.logHeliusData(req.body);
 
             try {
-                // Respond quickly to avoid timeout
                 res.status(200).json({ received: true });
-
-                // Process webhook data asynchronously with rate limiting
-                await this.webhookLimiter.schedule(() => 
-                    this.processWebhook(req.body)
-                );
-                this.logWithTimestamp('Webhook processing scheduled');
+                await this.webhookLimiter.schedule(() => this.processWebhook(req.body));
             } catch (error) {
                 this.logWithTimestamp('❌ Webhook processing error:', error);
                 res.status(500).json({ error: 'Internal server error' });
             }
         });
 
-        // Test endpoint for development
         this.app.post('/test-webhook', async (req, res) => {
-            this.logWithTimestamp('Test webhook received:', JSON.stringify(req.body));
-
-            // Save raw payload to file
+            this.logWithTimestamp('Test webhook received');
             this.logHeliusData(req.body);
 
             try {
@@ -110,88 +95,62 @@ class WebhookServer {
 
     async processWebhook(webhookData) {
         this.logWithTimestamp('Processing webhook data...');
-        try {
-            const transactions = Array.isArray(webhookData) ? webhookData : [webhookData];
-            this.logWithTimestamp(`Received ${transactions.length} transaction(s) to process`);
+        const transactions = Array.isArray(webhookData) ? webhookData : [webhookData];
+        this.logWithTimestamp(`Received ${transactions.length} transaction(s) to process`);
 
-            for (const transaction of transactions) {
-                this.logWithTimestamp(`Scheduling processing for transaction: ${transaction.signature}`);
-                await this.processTransaction(transaction);
-            }
-            this.logWithTimestamp('Finished processing webhook data');
-        } catch (error) {
-            this.logWithTimestamp('❌ Error processing webhook:', error);
+        for (const transaction of transactions) {
+            this.logWithTimestamp(`Scheduling processing for transaction: ${transaction.signature}`);
+            await this.processTransaction(transaction);
         }
+        this.logWithTimestamp('Finished processing webhook data');
     }
 
     async processTransaction(transaction) {
         this.logWithTimestamp('Processing transaction:', transaction.signature);
-        try {
-            const involvedAccounts = this.extractAccountAddresses(transaction);
-            this.logWithTimestamp('Involved accounts extracted:', involvedAccounts);
 
-            if (!this.heliusService.isSwapTransaction(transaction)) {
-                this.logWithTimestamp(`Transaction ${transaction.signature} is NOT a swap transaction, skipping`);
-                return;
+        if (!this.heliusService.isSwapTransaction(transaction)) {
+            this.logWithTimestamp(`Transaction ${transaction.signature} is NOT a swap transaction, skipping`);
+            return;
+        }
+
+        const swapDetails = this.heliusService.extractSwapDetails(transaction);
+        if (!swapDetails) {
+            this.logWithTimestamp(`Transaction ${transaction.signature} - Failed to extract swap details, skipping`);
+            return;
+        }
+
+        this.logWithTimestamp(`Swap detected for transaction ${transaction.signature}:`, swapDetails);
+
+        const involvedAccounts = this.extractAccountAddresses(transaction);
+        for (const account of involvedAccounts) {
+            const tracked = await this.isTrackedAlphaWallet(account);
+            if (tracked) {
+                this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
+                await this.tradingEngine.processSwapSignal(swapDetails, account);
+            } else {
+                this.logWithTimestamp(`Account ${account} is not a tracked alpha wallet`);
             }
-
-            const swapDetails = this.heliusService.extractSwapDetails(transaction);
-            if (!swapDetails) {
-                this.logWithTimestamp(`Transaction ${transaction.signature} - Failed to extract swap details, skipping`);
-                return;
-            }
-
-            this.logWithTimestamp(`Swap detected for transaction ${transaction.signature}:`, swapDetails);
-
-            for (const account of involvedAccounts) {
-                const tracked = await this.isTrackedAlphaWallet(account);
-                if (tracked) {
-                    this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
-                    await this.tradingEngine.processSwapSignal(swapDetails, account);
-                } else {
-                    this.logWithTimestamp(`Account ${account} is not a tracked alpha wallet`);
-                }
-            }
-        } catch (error) {
-            this.logWithTimestamp('❌ Error processing transaction:', error);
         }
     }
 
     extractAccountAddresses(transaction) {
         const accounts = new Set();
-
-        if (transaction.accountData) {
-            transaction.accountData.forEach(acc => accounts.add(acc.account));
-        }
-
-        if (transaction.instructions) {
-            transaction.instructions.forEach(ix => {
-                if (ix.accounts) {
-                    ix.accounts.forEach(acc => accounts.add(acc));
-                }
-            });
-        }
-
+        if (transaction.accountData) transaction.accountData.forEach(acc => accounts.add(acc.account));
+        if (transaction.instructions) transaction.instructions.forEach(ix => ix.accounts?.forEach(acc => accounts.add(acc)));
         if (transaction.feePayer) accounts.add(transaction.feePayer);
-        if (transaction.signers) {
-            transaction.signers.forEach(signer => accounts.add(signer));
-        }
-
+        if (transaction.signers) transaction.signers.forEach(signer => accounts.add(signer));
         return Array.from(accounts);
     }
 
     async isTrackedAlphaWallet(walletAddress) {
         return new Promise((resolve, reject) => {
             const query = 'SELECT COUNT(*) as count FROM alpha_wallets WHERE wallet_address = ? AND active = 1';
-
             database.db.get(query, [walletAddress], (err, row) => {
                 if (err) {
                     this.logWithTimestamp('❌ DB error checking alpha wallet:', err);
                     reject(err);
                 } else {
-                    const isTracked = row.count > 0;
-                    this.logWithTimestamp(`Wallet ${walletAddress} tracked status: ${isTracked}`);
-                    resolve(isTracked);
+                    resolve(row.count > 0);
                 }
             });
         });
@@ -199,27 +158,16 @@ class WebhookServer {
 
     start() {
         const port = process.env.WEBHOOK_PORT || 3001;
-
         this.server = this.app.listen(port, () => {
             this.logWithTimestamp(`🚀 Webhook server running on port ${port}`);
-            this.logWithTimestamp(`Webhook endpoint: http://localhost:${port}/webhook`);
         });
 
-        process.on('SIGTERM', () => {
-            this.logWithTimestamp('SIGTERM received, shutting down webhook server...');
-            this.server.close(() => {
-                this.logWithTimestamp('Webhook server closed');
-                process.exit(0);
-            });
-        });
-
-        process.on('SIGINT', () => {
-            this.logWithTimestamp('SIGINT received, shutting down webhook server...');
-            this.server.close(() => {
-                this.logWithTimestamp('Webhook server closed');
-                process.exit(0);
-            });
-        });
+        ['SIGTERM', 'SIGINT'].forEach(sig =>
+            process.on(sig, () => {
+                this.logWithTimestamp(`${sig} received, shutting down webhook server...`);
+                this.server.close(() => process.exit(0));
+            })
+        );
 
         return this.server;
     }
@@ -227,9 +175,7 @@ class WebhookServer {
     stop() {
         if (this.server) {
             this.logWithTimestamp('Stopping webhook server...');
-            this.server.close(() => {
-                this.logWithTimestamp('Webhook server stopped');
-            });
+            this.server.close(() => this.logWithTimestamp('Webhook server stopped'));
         }
     }
 }
