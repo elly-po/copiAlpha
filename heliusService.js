@@ -25,7 +25,7 @@ class HeliusService {
 
         if (existing) {
             this.logWithTimestamp(`ℹ️ Found existing webhook ${existing.webhookID}, updating instead of creating...`);
-            return await this.updateWebhook(existing.webhookID); // pass only webhookID
+            return await this.updateWebhook(existing.webhookID);
         }
 
         const webhookData = {
@@ -51,10 +51,8 @@ class HeliusService {
         }
     }
 
-    // UPDATED: merge all active alpha wallets
     async updateWebhook(webhookId) {
         try {
-            // fetch all active alpha wallets from DB
             const allWallets = await database.getAllActiveAlphaWallets();
             if (!allWallets.length) return;
 
@@ -123,7 +121,8 @@ class HeliusService {
                 events: tx.events || {},
                 type: tx.type,
                 swap: tx.swap || null,
-                tokenTransfers: tx.tokenTransfers || []
+                tokenTransfers: tx.tokenTransfers || [],
+                nativeTransfers: tx.nativeTransfers || []
             }));
 
             this.logWithTimestamp(`Processed ${transactions.length} transactions from webhook data`);
@@ -136,24 +135,16 @@ class HeliusService {
 
     isSwapTransaction(transaction) {
         const isSwap = transaction.type === 'SWAP';
-        this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction (according to Helius type)`);
+        this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction`);
         return isSwap;
     }
-    extractSwapDetails(transaction) {
+
+    extractSwapDetails(transaction, alphaWallet) {
         this.logWithTimestamp(`Extracting swap details from transaction: ${transaction.signature}`);
+
         try {
-            if ((!transaction.tokenTransfers || transaction.tokenTransfers.length === 0) &&
-            (!transaction.nativeTransfers || transaction.nativeTransfers.length === 0)) {
-                this.logWithTimestamp('No tokenTransfers or nativeTransfers found in transaction');
-                return null;
-            }
-
             const tokenTransfers = transaction.tokenTransfers || [];
-            const nativeTransfers = transaction.nativeTransfers || [];
-
-            // SPL token changes
-            const positiveChanges = tokenTransfers.filter(c => c.tokenAmount > 0);
-            const negativeChanges = tokenTransfers.filter(c => c.tokenAmount < 0);
+            const accountData = transaction.accountData || [];
 
             const swapDetails = {
                 signature: transaction.signature,
@@ -163,66 +154,45 @@ class HeliusService {
                 tokenOut: null,
                 amountIn: 0,
                 amountOut: 0,
-                side: 'buy'
+                side: null
             };
 
-            // Determine tokenIn
-            if (negativeChanges.length > 0) {
-            // Pick largest absolute outflow
-                const largestNeg = negativeChanges.reduce((prev, curr) =>
-                Math.abs(curr.tokenAmount) > Math.abs(prev.tokenAmount) ? curr : prev
-            );
-            swapDetails.tokenIn = largestNeg.mint;
-            swapDetails.amountIn = Math.abs(largestNeg.tokenAmount);
-                this.logWithTimestamp(`Detected tokenIn from SPL negativeChanges: ${swapDetails.tokenIn}`);
-            } else if (nativeTransfers.length > 0) {
-                // Native SOL outflow
-                const totalSolSpent = nativeTransfers
-                .filter(nt => nt.amount < 0)
-                .reduce((sum, nt) => sum + Math.abs(nt.amount), 0);
-            if (totalSolSpent > 0) {
+            // Process tokenTransfers
+            tokenTransfers.forEach(t => {
+                if (t.fromUserAccount === alphaWallet) {
+                    swapDetails.tokenIn = t.mint;
+                    swapDetails.amountIn = Math.abs(t.tokenAmount);
+                }
+                if (t.toUserAccount === alphaWallet) {
+                    swapDetails.tokenOut = t.mint;
+                    swapDetails.amountOut = Math.abs(t.tokenAmount);
+                }
+            });
+
+            // Process nativeBalanceChange for SOL
+            const nativeChange = accountData.find(a => a.account === alphaWallet)?.nativeBalanceChange || 0;
+
+            if (nativeChange < 0) {
                 swapDetails.tokenIn = 'SOL';
-                swapDetails.amountIn = totalSolSpent / 1e9; // lamports to SOL
-                this.logWithTimestamp(`Detected tokenIn from nativeTransfers: SOL`);
-            }
-        }
-
-        // Determine tokenOut
-        if (positiveChanges.length > 0) {
-            // Pick largest inflow
-            const largestPos = positiveChanges.reduce((prev, curr) =>
-                Math.abs(curr.tokenAmount) > Math.abs(prev.tokenAmount) ? curr : prev
-            );
-            swapDetails.tokenOut = largestPos.mint;
-            swapDetails.amountOut = Math.abs(largestPos.tokenAmount);
-            this.logWithTimestamp(`Detected tokenOut from SPL positiveChanges: ${swapDetails.tokenOut}`);
-        } else if (nativeTransfers.length > 0) {
-            // Native SOL inflow
-            const totalSolReceived = nativeTransfers
-                .filter(nt => nt.amount > 0)
-                .reduce((sum, nt) => sum + nt.amount, 0);
-            if (totalSolReceived > 0) {
+                swapDetails.amountIn = Math.abs(nativeChange) / 1e9;
+            } else if (nativeChange > 0) {
                 swapDetails.tokenOut = 'SOL';
-                swapDetails.amountOut = totalSolReceived / 1e9;
-                this.logWithTimestamp(`Detected tokenOut from nativeTransfers: SOL`);
+                swapDetails.amountOut = nativeChange / 1e9;
             }
+
+            // Determine side
+            if (swapDetails.tokenIn && !swapDetails.tokenOut) swapDetails.side = 'sell';
+            else if (!swapDetails.tokenIn && swapDetails.tokenOut) swapDetails.side = 'buy';
+            else swapDetails.side = swapDetails.amountIn >= swapDetails.amountOut ? 'sell' : 'buy';
+
+            this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
+            return swapDetails;
+
+        } catch (error) {
+            this.logWithTimestamp('Error extracting swap details:', error);
+            return null;
         }
-
-        // Determine side
-        if (swapDetails.tokenOut && swapDetails.tokenOut !== 'SOL') {
-            swapDetails.side = 'buy';
-        } else {
-            swapDetails.side = 'sell';
-        }
-
-        this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
-        return swapDetails;
-
-    } catch (error) {
-        this.logWithTimestamp('Error extracting swap details:', error);
-        return null;
     }
-}
 }
 
 module.exports = HeliusService;
