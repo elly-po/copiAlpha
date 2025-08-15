@@ -137,53 +137,46 @@ class HeliusService {
     }
 
     isSwapTransaction(transaction) {
-        const swapPrograms = [
-            'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', // Jupiter
-            '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium
-            '9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP'  // Orca
-        ];
-
-        const isSwap = transaction.instructions.some(ix => swapPrograms.includes(ix.programId));
-        this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction`);
-        return isSwap;
+    const isSwap = transaction.type === 'SWAP';
+    this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction (according to Helius type)`);
+    return isSwap;
     }
 
     extractSwapDetails(transaction) {
-        this.logWithTimestamp(`Extracting swap details from transaction: ${transaction.signature}`);
-        try {
-            const swapDetails = {
-                signature: transaction.signature,
-                timestamp: transaction.timestamp,
-                tokenChanges: []
-            };
-
-            transaction.accounts.forEach(account => {
-                if (account.tokenBalanceChanges && account.tokenBalanceChanges.length > 0) {
-                    account.tokenBalanceChanges.forEach(change => {
-                        swapDetails.tokenChanges.push({
-                            mint: change.mint,
-                            rawTokenAmount: change.rawTokenAmount,
-                            tokenAmount: change.tokenAmount,
-                            account: account.account
-                        });
-                    });
-                }
-            });
-
-            const positiveChanges = swapDetails.tokenChanges.filter(c => parseFloat(c.rawTokenAmount) > 0);
-            const negativeChanges = swapDetails.tokenChanges.filter(c => parseFloat(c.rawTokenAmount) < 0);
-
-            swapDetails.side = positiveChanges.length > 0 ? 'buy' : 'sell';
-            swapDetails.tokenIn = negativeChanges[0]?.mint;
-            swapDetails.tokenOut = positiveChanges[0]?.mint;
-            swapDetails.amountIn = Math.abs(parseFloat(negativeChanges[0]?.tokenAmount || 0));
-            swapDetails.amountOut = Math.abs(parseFloat(positiveChanges[0]?.tokenAmount || 0));
-
-            this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
-            return swapDetails;
-        } catch (error) {
-            this.logWithTimestamp('Error extracting swap details:', error);
+    this.logWithTimestamp(`Extracting swap details from transaction: ${transaction.signature}`);
+    try {
+        if (!transaction.tokenTransfers || transaction.tokenTransfers.length === 0) {
+            this.logWithTimestamp('No tokenTransfers found in transaction');
             return null;
+        }
+
+        const swapDetails = {
+            signature: transaction.signature,
+            timestamp: transaction.timestamp,
+            tokenChanges: transaction.tokenTransfers,
+            side: '',
+            tokenIn: null,
+            tokenOut: null,
+            amountIn: 0,
+            amountOut: 0
+        };
+
+        // Determine buy/sell
+        const positiveChanges = transaction.tokenTransfers.filter(c => c.tokenAmount > 0);
+        const negativeChanges = transaction.tokenTransfers.filter(c => c.tokenAmount < 0);
+
+        swapDetails.side = positiveChanges.length > 0 ? 'buy' : 'sell';
+        swapDetails.tokenIn = negativeChanges[0]?.mint;
+        swapDetails.tokenOut = positiveChanges[0]?.mint;
+        swapDetails.amountIn = Math.abs(negativeChanges[0]?.tokenAmount || 0);
+        swapDetails.amountOut = Math.abs(positiveChanges[0]?.tokenAmount || 0);
+
+        this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
+        return swapDetails;
+
+    } catch (error) {
+        this.logWithTimestamp('Error extracting swap details:', error);
+        return null;
         }
     }
 }
