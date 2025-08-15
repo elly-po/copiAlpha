@@ -168,8 +168,7 @@ class TelegramBot {
         // Start command
         this.bot.command("start", async (ctx) => {
             await this.handleWithErrorCatch(ctx, async () => {
-                await this.initUser(ctx);
-                await this.showWelcome(ctx);
+                await this.handleStart(ctx);
             });
         });
 
@@ -220,6 +219,7 @@ class TelegramBot {
             "portfolio": () => this.handlePortfolio(ctx),
             "view_alpha": () => this.showAlphaWallets(ctx),
             "remove_select": () => this.handleRemoveAlpha(ctx),
+            "copy_now": () => this.handleCopyNow(ctx),
             "help": () => this.handleHelp(ctx),
             "status_refresh": () => this.handleStatus(ctx),
             "cancel": async () => {
@@ -481,24 +481,37 @@ class TelegramBot {
     }
 
     async showMainMenu(ctx) {
-        await this.deleteMessage(ctx);
+    await this.deleteMessage(ctx);
 
-        const user = await this.ensureUserSession(ctx);
-        const alphaCount = await this.getAlphaWalletCount(user.id);
+    const user = await this.ensureUserSession(ctx);
+    const alphaWallets = await database.getAlphaWallets(user.id);
+    const alphaCount = alphaWallets.length;
 
-        const statusText = `
+    const statusText = `
 🏠 <b>Main Menu</b>
 
 👤 <b>User:</b> @${ctx.from.username || ctx.from.first_name}
 💼 <b>Wallet:</b> ${user.wallet_address ? this.truncateAddress(user.wallet_address) : "Not connected"}
 🎯 <b>Alpha Wallets:</b> ${alphaCount}/${this.config.MAX_ALPHA_WALLETS}
 💰 <b>Max Trade:</b> ${user.max_trade_amount} SOL
-        `;
+    `;
 
-        await ctx.reply(statusText, {
-            parse_mode: "HTML",
-            reply_markup: this.mainMenu,
-        });
+    const keyboard = new InlineKeyboard()
+        .text("👛 Connect Wallet", "connect_wallet")
+        .text("🎯 Add Alpha Wallets", "alpha_add")
+        .row()
+        .text("⚙️ Trading Settings", "settings");
+    if (alphaCount > 0) {
+        keyboard.text("🎯 Copy Now", "copy_now");
+    }
+
+    keyboard.row()
+        .text("📊 My Trades", "my_trades")
+        .text("💰 Portfolio", "portfolio")
+        .row()
+        .text("❓ Help", "help");
+
+    await ctx.reply(statusText, { parse_mode: "HTML", reply_markup: keyboard });
     }
 
     // Conversation handlers
@@ -822,6 +835,34 @@ class TelegramBot {
         return nameMap[settingType] || settingType;
     }
 
+    async handleStart(ctx) {
+        try {
+            // Ensure the user exists and session is initialized
+            const user = await this.initUser(ctx); // or ensureUserSession
+
+            await this.showWelcome(ctx);
+
+            const alphaWallets = await database.getAlphaWallets(user.id);
+
+            // Determine the main menu buttons
+            const keyboard = new InlineKeyboard()
+            /*if (alphaWallets.length > 0) {
+                keyboard.row().text("🎯 Copy Now", "copy_now");
+            } else {
+                keyboard.row().text("➕ Add Alpha Wallet", "alpha_add");
+            }
+
+            // Show the main menu
+            /*await ctx.reply("🏠 Main Menu", {
+                reply_markup: keyboard,
+            });*/
+
+        } catch (error) {
+            console.error("Error in handleStart:", this.sanitizeError(error));
+            await ctx.reply("❌ Error starting the bot. Please try again.");
+        }
+    }
+
     // Handler methods
     async handleAlphaWallets(ctx) {
         const user = await this.ensureUserSession(ctx);
@@ -970,6 +1011,38 @@ class TelegramBot {
         } catch (error) {
             console.error('Error in portfolio handler:', this.sanitizeError(error));
             await ctx.reply("❌ Error loading portfolio. Please try again.");
+        }
+    }
+
+    async handleCopyNow(ctx) {
+        await this.deleteMessage(ctx);
+
+        // Ensure we have the user session
+        const user = await this.ensureUserSession(ctx);
+
+        // Fetch all active alpha wallets for this user
+        const alphaWallets = await database.getAlphaWallets(user.id);
+
+        if (!alphaWallets || alphaWallets.length === 0) {
+            await ctx.reply("⚠️ You don't have any alpha wallets yet. Please add at least one to start copying.");
+            return;
+        }
+
+        try {
+            // Prepare an array of wallet addresses
+            const walletAddresses = alphaWallets.map(w => w.wallet_address);
+
+            // Call HeliusService to create or update the webhook
+            const result = await this.heliusService.createWebhook(walletAddresses, user.id);
+
+            if (result) {
+                await ctx.reply(`✅ Copying started! Helius will now track ${walletAddresses.length} alpha wallet(s).`);
+            } else {
+                await ctx.reply("❌ Failed to start copying. Please try again later.");
+            }
+        } catch (error) {
+            console.error("Error in handleCopyNow:", error);
+            await ctx.reply("❌ An unexpected error occurred while starting copy. Please try again.");
         }
     }
 
