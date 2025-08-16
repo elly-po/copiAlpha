@@ -15,7 +15,6 @@ class WebhookServer {
         this.heliusService = new HeliusService();
         this.tradingEngine = new TradingEngine(bot);
 
-        // Ensure data folder exists
         this.dataFolder = path.join(__dirname, 'data');
         if (!fs.existsSync(this.dataFolder)) fs.mkdirSync(this.dataFolder);
 
@@ -48,15 +47,15 @@ class WebhookServer {
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true }));
 
-        this.app.use('/webhook', (req, res, next) => {
+        /*this.app.use('/webhook', (req, res, next) => {
             const webhookSecret = req.headers['x-webhook-secret'];
-            if (webhookSecret !== process.env.WEBHOOK_SECRET) {
+            /*if (webhookSecret !== process.env.WEBHOOK_SECRET) {
                 this.logWithTimestamp('⚠️ Invalid webhook secret:', webhookSecret);
             } else {
                 this.logWithTimestamp('✅ Valid webhook secret received');
             }
             next();
-        });
+        });*/
     }
 
     setupRoutes() {
@@ -127,9 +126,9 @@ class WebhookServer {
             if (tracked) {
                 this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
                 await this.tradingEngine.processSwapSignal(swapDetails, account);
-            } else {
+            } /*else {
                 this.logWithTimestamp(`Account ${account} is not a tracked alpha wallet`);
-            }
+            }*/
         }
     }
 
