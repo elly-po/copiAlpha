@@ -7,7 +7,7 @@ class HeliusService {
     constructor() {
         this.apiKey = process.env.HELIUS_API_KEY;
         this.baseUrl = process.env.HELIUS_WEBHOOK_URL;
-        this.webhookUrl = `https://e0e22f03-f254-46ee-8d3a-1c5568cf6c98-00-2s5y4moat23yo.kirk.replit.dev/webhook`;
+        this.webhookUrl = process.env.WEBHOOK_URL;
 
         this.limiter = new Bottleneck({
             maxConcurrent: 2,
