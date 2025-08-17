@@ -46,16 +46,6 @@ class WebhookServer {
     setupMiddleware() {
         this.app.use(express.json({ limit: '10mb' }));
         this.app.use(express.urlencoded({ extended: true }));
-
-        /*this.app.use('/webhook', (req, res, next) => {
-            const webhookSecret = req.headers['x-webhook-secret'];
-            /*if (webhookSecret !== process.env.WEBHOOK_SECRET) {
-                this.logWithTimestamp('⚠️ Invalid webhook secret:', webhookSecret);
-            } else {
-                this.logWithTimestamp('✅ Valid webhook secret received');
-            }
-            next();
-        });*/
     }
 
     setupRoutes() {
@@ -112,23 +102,23 @@ class WebhookServer {
             return;
         }
 
-        const swapDetails = this.heliusService.extractSwapDetails(transaction);
-        if (!swapDetails) {
-            this.logWithTimestamp(`Transaction ${transaction.signature} - Failed to extract swap details, skipping`);
-            return;
-        }
-
-        this.logWithTimestamp(`Swap detected for transaction ${transaction.signature}:`, swapDetails);
-
         const involvedAccounts = this.extractAccountAddresses(transaction);
         for (const account of involvedAccounts) {
             const tracked = await this.isTrackedAlphaWallet(account);
             if (tracked) {
                 this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
+
+                // Pass the alpha wallet to extractSwapDetails
+                const swapDetails = this.heliusService.extractSwapDetails(transaction, account);
+
+                if (!swapDetails) {
+                    this.logWithTimestamp(`Transaction ${transaction.signature} - Failed to extract swap details, skipping`);
+                    continue;
+                }
+
+                this.logWithTimestamp(`Swap detected for transaction ${transaction.signature}:`, swapDetails);
                 await this.tradingEngine.processSwapSignal(swapDetails, account);
-            } /*else {
-                this.logWithTimestamp(`Account ${account} is not a tracked alpha wallet`);
-            }*/
+            }
         }
     }
 
