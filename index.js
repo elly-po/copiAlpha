@@ -43,7 +43,6 @@ class CopyTradingBot {
             this.isRunning = true;
             console.log('✅ Copy Trading Bot started successfully!');
             console.log(`📱 Telegram Bot: @${process.env.BOT_TOKEN?.split(':')[0] || 'Unknown'}`);
-            console.log(`🌐 Webhook Server: http://localhost:${process.env.WEBHOOK_PORT || 3001}`);
             console.log('🎯 Bot is now ready to copy trades!');
             
             // Setup graceful shutdown
