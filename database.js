@@ -1,9 +1,27 @@
+const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
+// Ensure the data folder exists once when this module is loaded
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir);
+    console.log('📁 Created data directory at:', dataDir);
+}
+
 class Database {
     constructor() {
-        this.db = new sqlite3.Database(path.join(__dirname, '../data/bot.db'));
+        const dbPath = path.join(dataDir, 'bot.db');
+        console.log('🗄  Using database file at:', dbPath);
+
+        this.db = new sqlite3.Database(dbPath, (err) => {
+            if (err) {
+                console.error("❌ Failed to open database:", err);
+            } else {
+                console.log("✅ Database opened successfully");
+            }
+        });
+
         this.initTables();
     }
 
@@ -21,7 +39,6 @@ class Database {
                 stop_loss REAL DEFAULT 20.0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
-            
             `CREATE TABLE IF NOT EXISTS alpha_wallets (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
@@ -31,7 +48,6 @@ class Database {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )`,
-            
             `CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
@@ -47,7 +63,6 @@ class Database {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )`,
-            
             `CREATE TABLE IF NOT EXISTS webhooks (
                 id INTEGER PRIMARY KEY,
                 webhook_id TEXT UNIQUE,
@@ -65,7 +80,7 @@ class Database {
         });
     }
 
-    async getUser(telegramId) {
+    getUser(telegramId) {
         return new Promise((resolve, reject) => {
             this.db.get(
                 'SELECT * FROM users WHERE telegram_id = ?',
@@ -78,7 +93,7 @@ class Database {
         });
     }
 
-    async createUser(telegramId) {
+    createUser(telegramId) {
         return new Promise((resolve, reject) => {
             this.db.run(
                 'INSERT INTO users (telegram_id) VALUES (?)',
@@ -91,10 +106,10 @@ class Database {
         });
     }
 
-    async updateUser(telegramId, updates) {
+    updateUser(telegramId, updates) {
         const fields = Object.keys(updates).map(key => `${key} = ?`).join(', ');
         const values = [...Object.values(updates), telegramId];
-        
+
         return new Promise((resolve, reject) => {
             this.db.run(
                 `UPDATE users SET ${fields} WHERE telegram_id = ?`,
@@ -107,7 +122,7 @@ class Database {
         });
     }
 
-    async addAlphaWallet(userId, walletAddress, nickname) {
+    addAlphaWallet(userId, walletAddress, nickname) {
         return new Promise((resolve, reject) => {
             this.db.run(
                 'INSERT INTO alpha_wallets (user_id, wallet_address, nickname) VALUES (?, ?, ?)',
@@ -120,7 +135,7 @@ class Database {
         });
     }
 
-    async getAlphaWallets(userId) {
+    getAlphaWallets(userId) {
         return new Promise((resolve, reject) => {
             this.db.all(
                 'SELECT * FROM alpha_wallets WHERE user_id = ? AND active = 1',
@@ -132,8 +147,20 @@ class Database {
             );
         });
     }
+    getAllActiveAlphaWallets() {
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                'SELECT wallet_address FROM alpha_wallets WHERE active = 1',
+                [],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows.map(r => r.wallet_address));
+                }
+            );
+        });
+    }
 
-    async deleteAlphaWallet(id) {
+    deleteAlphaWallet(id) {
         return new Promise((resolve, reject) => {
             this.db.run(
                 'UPDATE alpha_wallets SET active = 0 WHERE id = ?',
@@ -146,7 +173,7 @@ class Database {
         });
     }
 
-    async addTrade(tradeData) {
+    addTrade(tradeData) {
         return new Promise((resolve, reject) => {
             const { userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature } = tradeData;
             this.db.run(
@@ -160,7 +187,7 @@ class Database {
         });
     }
 
-    async getUserTrades(userId, limit = 10) {
+    getUserTrades(userId, limit = 10) {
         return new Promise((resolve, reject) => {
             this.db.all(
                 'SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
