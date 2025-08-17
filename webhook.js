@@ -9,7 +9,7 @@ const database = require('./database');
 
 class WebhookServer {
     constructor(bot) {
-        console.log('Current WEBHOOK_SECRET:', process.env.WEBHOOK_SECRET || 'NOT SET');
+        //console.log('Current WEBHOOK_SECRET:', process.env.WEBHOOK_SECRET || 'NOT SET');
         this.app = express();
         this.bot = bot;
         this.heliusService = new HeliusService();
