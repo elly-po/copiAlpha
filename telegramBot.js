@@ -210,6 +210,7 @@ class TelegramBot {
             "main_menu": () => this.showMainMenu(ctx),
             "alpha_wallets": () => this.handleAlphaWallets(ctx),
             "alpha_add": () => ctx.conversation.enter("alphaWallet"),
+            "connect_wallet": () => ctx.conversation.enter("wallet"),
             "settings": () => this.handleSettings(ctx),
             "settings_maxAmount": () => this.handleMaxAmount(ctx),
             "settings_slippage": () => this.handleSlippage(ctx),
@@ -220,6 +221,7 @@ class TelegramBot {
             "view_alpha": () => this.showAlphaWallets(ctx),
             "remove_select": () => this.handleRemoveAlpha(ctx),
             "copy_now": () => this.handleCopyNow(ctx),
+            "my_trades": () => this.handleMyTrades(ctx),
             "help": () => this.handleHelp(ctx),
             "status_refresh": () => this.handleStatus(ctx),
             "cancel": async () => {
@@ -310,7 +312,7 @@ class TelegramBot {
             const key = this.getEncryptionKey();
             const iv = crypto.randomBytes(this.config.ENCRYPTION.IV_LENGTH);
 
-            const cipher = crypto.createCipherGCM(this.config.ENCRYPTION.ALGORITHM, key, iv);
+            const cipher = crypto.createCipheriv(this.config.ENCRYPTION.ALGORITHM, key, iv);
 
             let encrypted = cipher.update(privateKey, 'utf8', 'hex');
             encrypted += cipher.final('hex');
@@ -341,7 +343,7 @@ class TelegramBot {
             const iv = Buffer.from(ivHex, 'hex');
             const tag = Buffer.from(tagHex, 'hex');
 
-            const decipher = crypto.createDecipherGCM(this.config.ENCRYPTION.ALGORITHM, key, iv);
+            const decipher = crypto.createDecipheriv(this.config.ENCRYPTION.ALGORITHM, key, iv);
             decipher.setAuthTag(tag);
 
             let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
@@ -1036,7 +1038,10 @@ class TelegramBot {
             const result = await this.heliusService.createWebhook(walletAddresses, user.id);
 
             if (result) {
-                await ctx.reply(`✅ Copying started! Helius will now track ${walletAddresses.length} alpha wallet(s).`);
+                const keyboard = new InlineKeyboard()
+                    .text("📊 My Trades", "my_trades")
+                    .text("🔙 Back", "back_menu");
+                await ctx.reply(`✅ Copying started! Helius will now track ${walletAddresses.length} alpha wallet(s).`,{reply_markup : keyboard} );
             } else {
                 await ctx.reply("❌ Failed to start copying. Please try again later.");
             }
