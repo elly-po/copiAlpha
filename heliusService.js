@@ -157,33 +157,48 @@ class HeliusService {
                 side: null
             };
 
-            // Process tokenTransfers
+            // Track if SOL is already in transfers
+            let solAlreadyHandled = false;
+
+            // Process tokenTransfers (normalize by decimals)
             tokenTransfers.forEach(t => {
+                const normalizedAmount = Math.abs(t.tokenAmount) / (10 ** (t.decimals || 0));
+
                 if (t.fromUserAccount === alphaWallet) {
                     swapDetails.tokenIn = t.mint;
-                    swapDetails.amountIn = Math.abs(t.tokenAmount);
+                    swapDetails.amountIn = normalizedAmount;
+                    if (t.mint === 'So11111111111111111111111111111111111111112') solAlreadyHandled = true;
                 }
                 if (t.toUserAccount === alphaWallet) {
                     swapDetails.tokenOut = t.mint;
-                    swapDetails.amountOut = Math.abs(t.tokenAmount);
+                    swapDetails.amountOut = normalizedAmount;
+                    if (t.mint === 'So11111111111111111111111111111111111111112') solAlreadyHandled = true;
                 }
             });
 
-            // Process nativeBalanceChange for SOL
-            const nativeChange = accountData.find(a => a.account === alphaWallet)?.nativeBalanceChange || 0;
+            // Handle nativeBalanceChange for SOL (if not already in tokenTransfers)
+            if (!solAlreadyHandled) {
+                const nativeChange = accountData.find(a => a.account === alphaWallet)?.nativeBalanceChange || 0;
 
-            if (nativeChange < 0) {
-                swapDetails.tokenIn = 'SOL';
-                swapDetails.amountIn = Math.abs(nativeChange) / 1e9;
-            } else if (nativeChange > 0) {
-                swapDetails.tokenOut = 'SOL';
-                swapDetails.amountOut = nativeChange / 1e9;
+                if (nativeChange < 0) {
+                    swapDetails.tokenIn = 'SOL';
+                    swapDetails.amountIn = Math.abs(nativeChange) / 1e9;
+                } else if (nativeChange > 0) {
+                    swapDetails.tokenOut = 'SOL';
+                    swapDetails.amountOut = nativeChange / 1e9;
+                }
             }
 
-            // Determine side
-            if (swapDetails.tokenIn && !swapDetails.tokenOut) swapDetails.side = 'sell';
-            else if (!swapDetails.tokenIn && swapDetails.tokenOut) swapDetails.side = 'buy';
-            else swapDetails.side = swapDetails.amountIn >= swapDetails.amountOut ? 'sell' : 'buy';
+            // Determine side robustly
+            if (swapDetails.tokenIn === 'SOL' && swapDetails.tokenOut && swapDetails.tokenOut !== 'SOL') {
+                swapDetails.side = 'buy';
+            } else if (swapDetails.tokenIn && swapDetails.tokenIn !== 'SOL' && swapDetails.tokenOut === 'SOL') {
+                swapDetails.side = 'sell';
+            } else if (swapDetails.amountIn && swapDetails.amountOut) {
+                swapDetails.side = swapDetails.amountIn >= swapDetails.amountOut ? 'sell' : 'buy';
+            } else {
+                swapDetails.side = null;
+            }
 
             this.logWithTimestamp(`Extracted swap details: ${JSON.stringify(swapDetails)}`);
             return swapDetails;
