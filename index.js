@@ -60,6 +60,8 @@ class CopyTradingBot {
             'BOT_TOKEN',
             'SOLANA_RPC_URL',
             'HELIUS_API_KEY',
+            'ENCRYPTION_KEY',
+            'WEBHOOK_URL'
         ];
 
         const missing = requiredEnvVars.filter(varName => !process.env[varName]);
