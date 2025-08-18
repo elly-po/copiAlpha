@@ -10,7 +10,7 @@ const database = require('./database');
 class WebhookServer {
     constructor(bot) {
         this.app = express();
-        //this.bot = bot;
+        this.bot = bot;
         this.heliusService = new HeliusService();
         this.tradingEngine = new TradingEngine(bot);
 
@@ -52,6 +52,16 @@ class WebhookServer {
             this.logWithTimestamp('Health check requested');
             res.json({ status: 'OK', timestamp: new Date().toISOString() });
         });
+        // Telegram webhook endpoint
+        this.app.post(`/bot${process.env.BOT_TOKEN}`, async (req, res) => {
+            try {
+                await this.bot.handleUpdate(req.body, res);
+            } catch (err) {
+                this.logWithTimestamp('❌ Error handling Telegram update:', err);
+                res.sendStatus(500);
+            }
+        });
+
 
         this.app.post('/webhook', async (req, res) => {
             this.logWithTimestamp('Webhook POST /webhook received');
