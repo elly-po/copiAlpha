@@ -1050,7 +1050,7 @@ class TelegramBot {
             if (result) {
                 const keyboard = new InlineKeyboard()
                     .text("📊 My Trades", "my_trades")
-                    .text("🔙 Back", "back_menu");
+                    .text("🔙 Back", "main_menu");
                 await ctx.reply(`✅ Copying started! Helius will now track ${walletAddresses.length} alpha wallet(s).`,{reply_markup : keyboard} );
             } else {
                 await ctx.reply("❌ Failed to start copying. Please try again later.");
