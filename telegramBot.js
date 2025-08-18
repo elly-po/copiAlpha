@@ -656,6 +656,8 @@ class TelegramBot {
             await ctx.reply("❌ Please provide wallet address(es).");
             return;
         }
+        
+        await this.deleteMessage(ctx, response.message.message_id);
 
         try {
             const wallets = input
