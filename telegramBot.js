@@ -1487,10 +1487,11 @@ class TelegramBot {
     }
 
     stop() {
-        if (this.bot) {
+        /*if (this.bot) {
             this.bot.stop();
             console.log("🤖 Telegram bot stopped");
-        }
+        }*/
+        console.log("🤖 Telegram bot stopped (webhook mode doesn't poll)");
     }
 
     getBot() {
