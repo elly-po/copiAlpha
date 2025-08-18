@@ -536,7 +536,7 @@ class TelegramBot {
     async walletConversation(conversation, ctx) {
         await this.deleteMessage(ctx);
 
-        await ctx.reply(
+        const promptMsg = await ctx.reply(
             "🔐 <b>Connect Your Solana Wallet</b>\n\n" +
             "⚠️ <b>SECURITY WARNING:</b>\n" +
             "• Never share your private key with anyone\n" +
@@ -552,6 +552,7 @@ class TelegramBot {
         const response = await conversation.waitFor(["message:text", "callback_query:data"]);
 
         if (response.callbackQuery?.data === "main_menu") {
+            await this.deleteMessage(ctx, promptMsg.message_id);
             return;
         }
 
@@ -583,6 +584,8 @@ class TelegramBot {
 
             // Delete the message containing the private key
             await this.deleteMessage(ctx, response.message.message_id);
+
+            await this.deleteMessage(ctx, promptMsg.message_id);
 
             // Get wallet balance safely
             let balanceText = "Loading...";
@@ -632,7 +635,7 @@ class TelegramBot {
 
         const remainingSlots = this.config.MAX_ALPHA_WALLETS - currentCount;
 
-        await ctx.reply(
+        const promptMsg = await ctx.reply(
             "🎯 <b>Add Alpha Wallet</b>\n\n" +
             "📝 Send wallet address(es) to track:\n" +
             "• Single wallet: <code>ADDRESS</code>\n" +
@@ -648,6 +651,7 @@ class TelegramBot {
         const response = await conversation.waitFor(["message:text", "callback_query:data"]);
 
         if (response.callbackQuery?.data === "alpha_wallets") {
+            await this.deleteMessage(ctx, promptMsg.message_id);
             return;
         }
 
@@ -658,6 +662,7 @@ class TelegramBot {
         }
         
         await this.deleteMessage(ctx, response.message.message_id);
+        await this.deleteMessage(ctx, promptMsg.message_id);
 
         try {
             const wallets = input
