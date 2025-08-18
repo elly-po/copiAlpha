@@ -10,7 +10,7 @@ const database = require('./database');
 class WebhookServer {
     constructor(bot) {
         this.app = express();
-        this.bot = bot;
+        //this.bot = bot;
         this.heliusService = new HeliusService();
         this.tradingEngine = new TradingEngine(bot);
 
