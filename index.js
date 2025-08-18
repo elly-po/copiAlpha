@@ -31,23 +31,18 @@ class CopyTradingBot {
             await this.waitForDatabase();
             
             // Start Telegram bot
-            console.log('🤖 Starting Telegram bot...');
+            console.log('🤖 Initializing Telegram bot...');
             this.telegramBot = new TelegramBot();
-            
-            const botInstance = this.telegramBot.getBot(); // <- call the method
-            botInstance.start({
-                drop_pending_updates: true,
-                onStart: (botInfo) => {
-                    console.log("✅ Telegram bot started successfully");
-                    console.log(`📱 Bot: @${botInfo.username}`);
-                    console.log(`🆔 Bot ID: ${botInfo.id}`);
-                    console.log(`🔒 Encryption: AES-256-GCM enabled`);
-                },
-            });
+            const botInstance = this.telegramBot.getBot();
+                    
+            console.log("✅ Telegram bot started successfully");      
+            console.log(`📱 Bot: @${botInfo.username}`);       
+            console.log(`🆔 Bot ID: ${botInfo.id}`);      
+            console.log(`🔒 Encryption: AES-256-GCM enabled`);
             
             // Start webhook server
             console.log('🌐 Starting webhook server...');
-            this.webhookServer = new WebhookServer();
+            this.webhookServer = new WebhookServer(botInstance);
             this.webhookServer.start();
             
             this.isRunning = true;
