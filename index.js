@@ -33,7 +33,9 @@ class CopyTradingBot {
             // Start Telegram bot
             console.log('🤖 Starting Telegram bot...');
             this.telegramBot = new TelegramBot();
-            this.telegramBot.getBot.start({
+            
+            const botInstance = this.telegramBot.getBot(); // <- call the method
+            botInstance.start({
                 drop_pending_updates: true,
                 onStart: (botInfo) => {
                     console.log("✅ Telegram bot started successfully");
