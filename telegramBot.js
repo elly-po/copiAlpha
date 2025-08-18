@@ -52,6 +52,12 @@ class TelegramBot {
         this.setupCallbackHandlers();
     }
 
+     async init() {
+        // Initialize the bot (important for webhook mode)
+        await this.bot.init();  
+        console.log('✅ Telegram bot initialized (bot.init completed)');
+     }
+
     validateBotToken() {
         const token = process.env.BOT_TOKEN;
         if (!token) {
