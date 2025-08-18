@@ -83,16 +83,6 @@ class CopyTradingBot {
         console.log('✅ Environment variables validated');
     }
 
-    async waitForDatabase() {
-        return new Promise((resolve) => {
-            // Give database a moment to initialize
-            setTimeout(() => {
-                console.log('✅ Database initialized');
-                resolve();
-            }, 1000);
-        });
-    }
-
     setupGracefulShutdown() {
         const shutdownHandler = async (signal) => {
             console.log(`\n📥 Received ${signal}, shutting down gracefully...`);
