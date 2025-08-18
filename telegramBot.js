@@ -1078,7 +1078,7 @@ class TelegramBot {
                 const keyboard = new InlineKeyboard()
                     .text("📊 My Trades", "my_trades")
                     .text("🔙 Back", "main_menu");
-                await ctx.reply(`✅ Copying started! copiAlpha bot will now Copy trade and push Alerts you for your ${walletAddresses.length} alpha wallet(s) When they act. You can no see trades @ 📊 My Trades `,{reply_markup : keyboard} );
+                await ctx.reply(`✅ Copying started! copiAlpha bot will now Copy trade and push Alerts for your ${walletAddresses.length} alpha wallet(s) When they act. You can now see trades @ 📊 My Trades `,{reply_markup : keyboard} );
             } else {
                 await ctx.reply("❌ Failed to start copying. Please try again later.");
             }
