@@ -1401,7 +1401,7 @@ class TelegramBot {
         }
     }
 
-    // Database utility methods with better error handling
+    /*// Database utility methods with better error handling
     async getTotalTrades(userId) {
         try {
             return await new Promise((resolve, reject) => {
@@ -1466,7 +1466,7 @@ class TelegramBot {
             console.error('Error getting total PnL:', this.sanitizeError(error));
             return 0;
         }
-    }
+    }*/
 
     // Bot lifecycle methods
     start() {
