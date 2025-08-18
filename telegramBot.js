@@ -1133,10 +1133,8 @@ class TelegramBot {
             await this.deleteMessage(ctx);
             const user = await this.ensureUserSession(ctx, { refresh: true });
 
-            const [alphaWallets, recentTrades] = await Promise.all([
-                database.getAlphaWallets(user.id),
-                database.getUserTrades(user.id, 5)
-            ]);
+            const alphaWallets = database.getAlphaWallets(user.id);
+            const recentTrades = database.getUserTrades(user.id, 5);
 
             let walletBalance = 0;
             let balanceStatus = "❌ Not connected";
