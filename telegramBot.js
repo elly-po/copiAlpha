@@ -495,7 +495,7 @@ class TelegramBot {
     async showMainMenu(ctx) {
     await this.deleteMessage(ctx);
 
-    const user = await this.ensureUserSession(ctx);
+    const user = await this.ensureUserSession(ctx, { refresh: true });
     const alphaWallets = await database.getAlphaWallets(user.id);
     const alphaCount = alphaWallets.length;
 
@@ -961,7 +961,7 @@ class TelegramBot {
     }
 
     async handlePortfolio(ctx) {
-        const user = await this.ensureUserSession(ctx);
+        const user = await this.ensureUserSession(ctx, { refresh: true });
         await this.deleteMessage(ctx);
 
         if (!user.wallet_address) {
@@ -995,11 +995,9 @@ class TelegramBot {
                 tokenAccounts = [];
             }
 
-            const [totalTrades, winRate, totalPnL] = await Promise.all([
-                this.getTotalTrades(user.id),
-                this.getWinRate(user.id),
-                this.getTotalPnL(user.id)
-            ]);
+            const totalTrades = database.getTotalTrades(user.id);
+            const winRate = database.getWinRate(user.id);
+            const totalPnL = database.getTotalPnL(user.id);
 
             let message = `
 💰 <b>Portfolio Overview</b>
@@ -1030,7 +1028,7 @@ class TelegramBot {
         await this.deleteMessage(ctx);
 
         // Ensure we have the user session
-        const user = await this.ensureUserSession(ctx);
+        const user = await this.ensureUserSession(ctx, { refresh: true });
 
         // Fetch all active alpha wallets for this user
         const alphaWallets = await database.getAlphaWallets(user.id);
@@ -1104,7 +1102,7 @@ class TelegramBot {
     async handleStatus(ctx) {
         try {
             await this.deleteMessage(ctx);
-            const user = await this.ensureUserSession(ctx);
+            const user = await this.ensureUserSession(ctx, { refresh: true });
 
             const [alphaWallets, recentTrades] = await Promise.all([
                 database.getAlphaWallets(user.id),
@@ -1168,7 +1166,7 @@ class TelegramBot {
     async toggleAutoSell(ctx) {
         try {
             await this.deleteMessage(ctx);
-            const user = await this.ensureUserSession(ctx);
+            const user = await this.ensureUserSession(ctx, { refresh: true });
             const newValue = user.auto_sell_enabled ? 0 : 1;
 
             await database.updateUser(ctx.from.id, {
