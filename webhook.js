@@ -48,49 +48,60 @@ class WebhookServer {
     }
 
     setupRoutes() {
+        // Health check route
         this.app.get('/health', (req, res) => {
             this.logWithTimestamp('Health check requested');
             res.json({ status: 'OK', timestamp: new Date().toISOString() });
         });
-   
+        
+        // Telegram webhook
         this.app.post('/telegram-webhook', async (req, res) => {
+            this.logWithTimestamp('Telegram webhook received');
+            // Immediately acknowledge Telegram
+            res.sendStatus(200);
+            
             try {
-                await this.bot.handleUpdate(req.body); // Pass the update to your bot instance
-                res.sendStatus(200);
+                await this.bot.handleUpdate(req.body); // Process update asynchronously
             } catch (err) {
                 this.logWithTimestamp("❌ Error handling Telegram webhook:", err);
-                res.sendStatus(500);
+                // no res here, already sent
             }
         });
-
-
+        
+        // Main Helius webhook
         this.app.post('/webhook', async (req, res) => {
             this.logWithTimestamp('Webhook POST /webhook received');
             this.logHeliusData(req.body);
-
+            
+            // Immediately respond to sender
+            res.status(200).json({ received: true });
+            
             try {
-                res.status(200).json({ received: true });
                 await this.webhookLimiter.schedule(() => this.processWebhook(req.body));
             } catch (error) {
                 this.logWithTimestamp('❌ Webhook processing error:', error);
-                res.status(500).json({ error: 'Internal server error' });
+                // no res here, already sent
             }
         });
-
+        
+        // Test webhook (manual testing)
         this.app.post('/test-webhook', async (req, res) => {
             this.logWithTimestamp('Test webhook received');
             this.logHeliusData(req.body);
-
+            
+            // Immediately acknowledge test webhook
+            res.status(200).json({ received: true });
+            
             try {
                 await this.processWebhook(req.body);
-                res.json({ status: 'Test webhook processed' });
                 this.logWithTimestamp('Test webhook processed successfully');
             } catch (error) {
                 this.logWithTimestamp('❌ Test webhook error:', error);
-                res.status(500).json({ error: error.message });
+                // no res here, already sent
             }
         });
     }
+
 
     async processWebhook(webhookData) {
         this.logWithTimestamp('Processing webhook data...');
@@ -142,19 +153,11 @@ class WebhookServer {
     }
 
     async isTrackedAlphaWallet(walletAddress) {
-        return new Promise((resolve, reject) => {
-            const query = 'SELECT COUNT(*) as count FROM alpha_wallets WHERE wallet_address = ? AND active = 1';
-            database.db.get(query, [walletAddress], (err, row) => {
-                if (err) {
-                    this.logWithTimestamp('❌ DB error checking alpha wallet:', err);
-                    reject(err);
-                } else {
-                    resolve(row.count > 0);
-                }
-            });
-        });
+        const wallets = database.getAllActiveAlphaWallets();
+        return wallets.includes(walletAddress);
     }
 
+    
     start() {
         const port = process.env.PORT || 3001;
         this.server = this.app.listen(port, () => {
