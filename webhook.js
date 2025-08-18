@@ -52,12 +52,13 @@ class WebhookServer {
             this.logWithTimestamp('Health check requested');
             res.json({ status: 'OK', timestamp: new Date().toISOString() });
         });
-        // Telegram webhook endpoint
-        this.app.post(`/bot${process.env.BOT_TOKEN}`, async (req, res) => {
+   
+        this.app.post('/telegram-webhook', async (req, res) => {
             try {
-                await this.bot.handleUpdate(req.body, res);
+                await this.bot.handleUpdate(req.body); // Pass the update to your bot instance
+                res.sendStatus(200);
             } catch (err) {
-                this.logWithTimestamp('❌ Error handling Telegram update:', err);
+                this.logWithTimestamp("❌ Error handling Telegram webhook:", err);
                 res.sendStatus(500);
             }
         });
