@@ -156,7 +156,7 @@ class WebhookServer {
     }
 
     start() {
-        const port = process.env.WEBHOOK_PORT || 3001;
+        const port = process.env.PORT || 3001;
         this.server = this.app.listen(port, () => {
             this.logWithTimestamp(`🚀 Webhook server running on port ${port}`);
         });
