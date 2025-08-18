@@ -1,6 +1,6 @@
 const fs = require('fs');
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const Database = require('better-sqlite3');
 
 // Ensure the data folder exists once when this module is loaded
 const dataDir = path.join(__dirname, 'data');
@@ -9,18 +9,18 @@ if (!fs.existsSync(dataDir)) {
     console.log('📁 Created data directory at:', dataDir);
 }
 
-class Database {
+class DB {
     constructor() {
         const dbPath = path.join(dataDir, 'bot.db');
         console.log('🗄  Using database file at:', dbPath);
 
-        this.db = new sqlite3.Database(dbPath, (err) => {
-            if (err) {
-                console.error("❌ Failed to open database:", err);
-            } else {
-                console.log("✅ Database opened successfully");
-            }
-        });
+        try {
+            this.db = new Database(dbPath);
+            console.log("✅ Database opened successfully");
+        } catch (err) {
+            console.error("❌ Failed to open database:", err);
+            throw err; // fatal
+        }
 
         this.initTables();
     }
@@ -73,132 +73,121 @@ class Database {
             )`
         ];
 
-        tables.forEach(sql => {
-            this.db.run(sql, (err) => {
-                if (err) console.error('Error creating table:', err);
-            });
-        });
+        for (const sql of tables) {
+            try {
+                this.db.prepare(sql).run();
+            } catch (err) {
+                console.error("❌ Error creating table:", err);
+            }
+        }
     }
 
     getUser(telegramId) {
-        return new Promise((resolve, reject) => {
-            this.db.get(
-                'SELECT * FROM users WHERE telegram_id = ?',
-                [telegramId],
-                (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                }
-            );
-        });
+        try {
+            return this.db.prepare(
+                'SELECT * FROM users WHERE telegram_id = ?'
+            ).get(telegramId);
+        } catch (err) {
+            console.error("❌ getUser failed:", err);
+            return null;
+        }
     }
 
     createUser(telegramId) {
-        return new Promise((resolve, reject) => {
-            this.db.run(
-                'INSERT INTO users (telegram_id) VALUES (?)',
-                [telegramId],
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this.lastID);
-                }
+        try {
+            const stmt = this.db.prepare(
+                'INSERT INTO users (telegram_id) VALUES (?)'
             );
-        });
+            return stmt.run(telegramId).lastInsertRowid;
+        } catch (err) {
+            console.error("❌ createUser failed:", err);
+            throw err;
+        }
     }
 
     updateUser(telegramId, updates) {
-        const fields = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
         const values = [...Object.values(updates), telegramId];
-
-        return new Promise((resolve, reject) => {
-            this.db.run(
-                `UPDATE users SET ${fields} WHERE telegram_id = ?`,
-                values,
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                }
-            );
-        });
+        try {
+            this.db.prepare(
+                `UPDATE users SET ${fields} WHERE telegram_id = ?`
+            ).run(values);
+        } catch (err) {
+            console.error("❌ updateUser failed:", err);
+            throw err;
+        }
     }
 
     addAlphaWallet(userId, walletAddress, nickname) {
-        return new Promise((resolve, reject) => {
-            this.db.run(
-                'INSERT INTO alpha_wallets (user_id, wallet_address, nickname) VALUES (?, ?, ?)',
-                [userId, walletAddress, nickname],
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this.lastID);
-                }
+        try {
+            const stmt = this.db.prepare(
+                'INSERT INTO alpha_wallets (user_id, wallet_address, nickname) VALUES (?, ?, ?)'
             );
-        });
+            return stmt.run(userId, walletAddress, nickname).lastInsertRowid;
+        } catch (err) {
+            console.error("❌ addAlphaWallet failed:", err);
+            throw err;
+        }
     }
 
     getAlphaWallets(userId) {
-        return new Promise((resolve, reject) => {
-            this.db.all(
-                'SELECT * FROM alpha_wallets WHERE user_id = ? AND active = 1',
-                [userId],
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                }
-            );
-        });
+        try {
+            return this.db.prepare(
+                'SELECT * FROM alpha_wallets WHERE user_id = ? AND active = 1'
+            ).all(userId);
+        } catch (err) {
+            console.error("❌ getAlphaWallets failed:", err);
+            return [];
+        }
     }
+
     getAllActiveAlphaWallets() {
-        return new Promise((resolve, reject) => {
-            this.db.all(
-                'SELECT wallet_address FROM alpha_wallets WHERE active = 1',
-                [],
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows.map(r => r.wallet_address));
-                }
-            );
-        });
+        try {
+            const rows = this.db.prepare(
+                'SELECT wallet_address FROM alpha_wallets WHERE active = 1'
+            ).all();
+            return rows.map(r => r.wallet_address);
+        } catch (err) {
+            console.error("❌ getAllActiveAlphaWallets failed:", err);
+            return [];
+        }
     }
 
     deleteAlphaWallet(id) {
-        return new Promise((resolve, reject) => {
-            this.db.run(
-                'UPDATE alpha_wallets SET active = 0 WHERE id = ?',
-                [id],
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                }
-            );
-        });
+        try {
+            this.db.prepare(
+                'UPDATE alpha_wallets SET active = 0 WHERE id = ?'
+            ).run(id);
+        } catch (err) {
+            console.error("❌ deleteAlphaWallet failed:", err);
+            throw err;
+        }
     }
 
-    addTrade(tradeData) {
-        return new Promise((resolve, reject) => {
-            const { userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature } = tradeData;
-            this.db.run(
-                'INSERT INTO trades (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature],
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this.lastID);
-                }
+    addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature }) {
+        try {
+            const stmt = this.db.prepare(
+                `INSERT INTO trades 
+                (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
             );
-        });
+            return stmt.run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature).lastInsertRowid;
+        } catch (err) {
+            console.error("❌ addTrade failed:", err);
+            throw err;
+        }
     }
 
     getUserTrades(userId, limit = 10) {
-        return new Promise((resolve, reject) => {
-            this.db.all(
-                'SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
-                [userId, limit],
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                }
-            );
-        });
+        try {
+            return this.db.prepare(
+                'SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
+            ).all(userId, limit);
+        } catch (err) {
+            console.error("❌ getUserTrades failed:", err);
+            return [];
+        }
     }
 }
 
-module.exports = new Database();
+module.exports = new DB();
