@@ -50,22 +50,6 @@ class TradingEngine {
         }
     }
 
-    async getUsersTrackingWallet(alphaWallet) {
-        return new Promise((resolve, reject) => {
-            const query = `
-                SELECT u.*, aw.wallet_address as alpha_wallet
-                FROM users u
-                JOIN alpha_wallets aw ON u.id = aw.user_id
-                WHERE aw.wallet_address = ? AND aw.active = 1 AND u.wallet_address IS NOT NULL
-            `;
-            
-            database.db.all(query, [alphaWallet], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
-        });
-    }
-
     async executeCopyTrade(user, swapDetails, alphaWallet) {
         try {
             console.log('Executing copy trade for user:', user.telegram_id);
@@ -284,46 +268,43 @@ class TradingEngine {
             console.error('Error monitoring positions:', error);
         }
     }
-
+    
     async getUsersWithAutoSell() {
-        return new Promise((resolve, reject) => {
-            database.db.all(
-                'SELECT * FROM users WHERE auto_sell_enabled = 1 AND wallet_address IS NOT NULL',
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                }
-            );
-        });
+        try {
+            return database.db.prepare(
+                'SELECT * FROM users WHERE auto_sell_enabled = 1 AND wallet_address IS NOT NULL'
+            ).all();
+        } catch (err) {
+            console.error('DB error fetching users with auto-sell:', err);
+            return [];
+        }
     }
-
     async getUserPositions(userId) {
-        return new Promise((resolve, reject) => {
+        try {
             const query = `
                 SELECT 
                     token_address,
                     token_symbol,
                     SUM(CASE WHEN side = 'buy' THEN amount ELSE -amount END) as net_amount,
-                    AVG(CASE WHEN side = 'buy' THEN price END) as avg_entry_price,
-                    COUNT(*) as trade_count
+                    AVG(CASE WHEN side = 'buy' THEN price END) as avg_entry_price
                 FROM trades 
                 WHERE user_id = ? AND status = 'completed'
                 GROUP BY token_address
                 HAVING net_amount > 0
             `;
-            
-            database.db.all(query, [userId], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows.map(row => ({
-                    tokenAddress: row.token_address,
-                    tokenSymbol: row.token_symbol,
-                    amount: row.net_amount,
-                    entryPrice: row.avg_entry_price,
-                    currentValue: 0, // Would be calculated from current price
-                    entryValue: row.net_amount * row.avg_entry_price
-                })));
-            });
-        });
+            const rows = database.db.prepare(query).all(userId);
+            return rows.map(row => ({
+                tokenAddress: row.token_address,
+                tokenSymbol: row.token_symbol,
+                amount: row.net_amount,
+                entryPrice: row.avg_entry_price,
+                currentValue: 0,
+                entryValue: row.net_amount * row.avg_entry_price
+            }));
+        } catch (err) {
+            console.error('DB error fetching user positions:', err);
+            return [];
+        }
     }
 
     // Market data helpers
@@ -383,10 +364,9 @@ class TradingEngine {
         
         return blacklistedTokens.includes(tokenAddress);
     }
-
-    // Performance metrics
+    
     async calculateUserStats(userId) {
-        return new Promise((resolve, reject) => {
+        try {
             const query = `
                 SELECT 
                     COUNT(*) as total_trades,
@@ -398,25 +378,22 @@ class TradingEngine {
                 FROM trades 
                 WHERE user_id = ? AND status = 'completed'
             `;
-            
-            database.db.get(query, [userId], (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    const stats = {
-                        totalTrades: row.total_trades || 0,
-                        winningTrades: row.winning_trades || 0,
-                        winRate: row.total_trades > 0 ? (row.winning_trades / row.total_trades * 100) : 0,
-                        avgProfitLoss: row.avg_profit_loss || 0,
-                        totalProfitLoss: row.total_profit_loss || 0,
-                        bestTrade: row.best_trade || 0,
-                        worstTrade: row.worst_trade || 0
-                    };
-                    resolve(stats);
-                }
-            });
-        });
+            const row = database.db.prepare(query).get(userId);
+            return {
+                totalTrades: row.total_trades || 0,
+                winningTrades: row.winning_trades || 0,
+                winRate: row.total_trades > 0 ? (row.winning_trades / row.total_trades * 100) : 0,
+                avgProfitLoss: row.avg_profit_loss || 0,
+                totalProfitLoss: row.total_profit_loss || 0,
+                bestTrade: row.best_trade || 0,
+                worstTrade: row.worst_trade || 0
+            };
+        } catch (err) {
+            console.error('DB error calculating user stats:', err);
+            return {};
+        }
     }
+
 
     // Emergency stop functionality
     async emergencyStopUser(userId, reason = 'Manual stop') {
@@ -441,28 +418,18 @@ class TradingEngine {
             console.error('Error during emergency stop:', error);
         }
     }
-
-    // Cleanup old trades
     async cleanupOldTrades() {
         try {
-            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-            
-            database.db.run(
-                'DELETE FROM trades WHERE created_at < ? AND status != "pending"',
-                [thirtyDaysAgo],
-                function(err) {
-                    if (err) {
-                        console.error('Error cleaning up old trades:', err);
-                    } else {
-                        console.log(`Cleaned up ${this.changes} old trades`);
-                    }
-                }
-            );
-        } catch (error) {
-            console.error('Error in cleanup:', error);
+            const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString();
+            const result = database.db.prepare(
+                'DELETE FROM trades WHERE created_at < ? AND status != "pending"'
+            ).run(thirtyDaysAgo);
+            console.log(`Cleaned up ${result.changes} old trades`);
+        } catch (err) {
+            console.error('Error cleaning up old trades:', err);
         }
     }
+
 }
 
 module.exports = TradingEngine;
-
