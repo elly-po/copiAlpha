@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
-// Ensure the data folder exists once when this module is loaded
+// Ensure the data folder exists
 const dataDir = path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir);
@@ -19,7 +19,7 @@ class DB {
             console.log("✅ Database opened successfully");
         } catch (err) {
             console.error("❌ Failed to open database:", err);
-            throw err; // fatal
+            throw err;
         }
 
         this.initTables();
@@ -82,6 +82,7 @@ class DB {
         }
     }
 
+    // User methods
     getUser(telegramId) {
         try {
             return this.db.prepare(
@@ -106,24 +107,22 @@ class DB {
     }
 
     updateUser(telegramId, updates) {
-        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-        const values = [...Object.values(updates), telegramId];
         try {
-            this.db.prepare(
-                `UPDATE users SET ${fields} WHERE telegram_id = ?`
-            ).run(values);
+            const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+            const values = [...Object.values(updates), telegramId];
+            this.db.prepare(`UPDATE users SET ${fields} WHERE telegram_id = ?`).run(values);
         } catch (err) {
             console.error("❌ updateUser failed:", err);
             throw err;
         }
     }
 
+    // Alpha Wallet methods
     addAlphaWallet(userId, walletAddress, nickname) {
         try {
-            const stmt = this.db.prepare(
+            return this.db.prepare(
                 'INSERT INTO alpha_wallets (user_id, wallet_address, nickname) VALUES (?, ?, ?)'
-            );
-            return stmt.run(userId, walletAddress, nickname).lastInsertRowid;
+            ).run(userId, walletAddress, nickname).lastInsertRowid;
         } catch (err) {
             console.error("❌ addAlphaWallet failed:", err);
             throw err;
@@ -164,14 +163,14 @@ class DB {
         }
     }
 
+    // Trade methods
     addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature }) {
         try {
-            const stmt = this.db.prepare(
+            return this.db.prepare(
                 `INSERT INTO trades 
                 (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-            );
-            return stmt.run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature).lastInsertRowid;
+            ).run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature).lastInsertRowid;
         } catch (err) {
             console.error("❌ addTrade failed:", err);
             throw err;
@@ -186,6 +185,45 @@ class DB {
         } catch (err) {
             console.error("❌ getUserTrades failed:", err);
             return [];
+        }
+    }
+
+    // Aggregates
+    getTotalTrades(userId) {
+        try {
+            const row = this.db.prepare(
+                'SELECT COUNT(*) AS count FROM trades WHERE user_id = ?'
+            ).get(userId);
+            return row?.count || 0;
+        } catch (err) {
+            console.error("❌ getTotalTrades failed:", err);
+            return 0;
+        }
+    }
+
+    getWinRate(userId) {
+        try {
+            const winsRow = this.db.prepare(
+                'SELECT COUNT(*) AS count FROM trades WHERE user_id = ? AND profit_loss > 0'
+            ).get(userId);
+            const wins = winsRow?.count || 0;
+            const total = this.getTotalTrades(userId);
+            return total > 0 ? Math.round((wins / total) * 100) : 0;
+        } catch (err) {
+            console.error("❌ getWinRate failed:", err);
+            return 0;
+        }
+    }
+
+    getTotalPnL(userId) {
+        try {
+            const row = this.db.prepare(
+                'SELECT SUM(profit_loss) AS total FROM trades WHERE user_id = ?'
+            ).get(userId);
+            return row?.total || 0;
+        } catch (err) {
+            console.error("❌ getTotalPnL failed:", err);
+            return 0;
         }
     }
 }
