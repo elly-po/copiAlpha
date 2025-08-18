@@ -33,7 +33,16 @@ class CopyTradingBot {
             // Start Telegram bot
             console.log('🤖 Starting Telegram bot...');
             this.telegramBot = new TelegramBot();
-            const bot = this.telegramBot.start();
+            this.telegramBot.getBot.start({
+                drop_pending_updates: true,
+                onStart: (botInfo) => {
+                    console.log("✅ Telegram bot started successfully");
+                    console.log(`📱 Bot: @${botInfo.username}`);
+                    console.log(`🆔 Bot ID: ${botInfo.id}`);
+                    console.log(`🔒 Encryption: AES-256-GCM enabled`);
+                    console.log(`📊 Max alpha wallets: ${this.config.MAX_ALPHA_WALLETS}`);
+                },
+            });
             
             // Start webhook server
             console.log('🌐 Starting webhook server...');
