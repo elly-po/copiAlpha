@@ -16,7 +16,8 @@ class DB {
 
         try {
             this.db = new Database(dbPath);
-            console.log("✅ Database opened successfully");
+            console.log("✅ Database opened successfully at:", dbPath);
+            console.log("✅ Database initialized and ready for queries");
         } catch (err) {
             console.error("❌ Failed to open database:", err);
             throw err;
