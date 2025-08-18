@@ -14,21 +14,39 @@ class TradingEngine {
             minTime: 1000 // 1 second between trades
         });
     }
-
+    
     async processSwapSignal(swapDetails, alphaWallet) {
         try {
-            console.log('Processing swap signal:', { swapDetails, alphaWallet });
+            console.log('Processing swap signal |', 
+                Object.entries({ swapDetails, alphaWallet })
+                      .map(([k,v]) => `${k}:${JSON.stringify(v)}`)
+                      .join(' | ')
+            );
 
-            // Get all users tracking this alpha wallet
             const users = await this.getUsersTrackingWallet(alphaWallet);
-            
+
             for (const user of users) {
-                await this.tradeLimiter.schedule(() => 
+                await this.tradeLimiter.schedule(() =>
                     this.executeCopyTrade(user, swapDetails, alphaWallet)
                 );
             }
         } catch (error) {
             console.error('Error processing swap signal:', error);
+        }
+    }
+
+    async getUsersTrackingWallet(alphaWallet) {
+        try {
+            const query = `
+                SELECT u.*, aw.wallet_address as alpha_wallet
+                FROM users u
+                JOIN alpha_wallets aw ON u.id = aw.user_id
+                WHERE aw.wallet_address = ? AND aw.active = 1 AND u.wallet_address IS NOT NULL
+            `;
+            return database.db.prepare(query).all(alphaWallet);
+        } catch (err) {
+            console.error('DB error fetching users tracking wallet:', err);
+            return [];
         }
     }
 
