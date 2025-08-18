@@ -35,10 +35,54 @@ class WebhookServer {
     logHeliusData(payload) {
         const entry = { timestamp: new Date().toISOString(), data: payload };
         try {
-            fs.appendFileSync(this.heliusLogPath, JSON.stringify(entry, null, 2) + '\n');
-            this.logWithTimestamp('📁 Helius payload logged to file:', this.heliusLogPath);
-            // Also log to console for research
-            console.log('💾 Transaction payload:', JSON.stringify(payload, null, 2));
+            // Save raw JSON to file
+            fs.appendFileSync(this.heliusLogPath, JSON.stringify(entry) + '\n');
+            
+            // Ensure we always work with an array
+            const transactions = Array.isArray(payload) ? payload : [payload];
+            
+            transactions.forEach(tx => {
+                console.log('💾 Helius Transaction Summary:');
+                console.log('• Signature:', tx.signature || 'N/A');
+                console.log('• Fee Payer:', tx.feePayer || 'N/A');
+                console.log('• Slot:', tx.slot || 'N/A');
+                console.log('• Block Time:', tx.blockTime || 'N/A');
+                
+                // Accounts and native changes
+                if (Array.isArray(tx.accountData)) {
+                    tx.accountData.forEach(a => {
+                        console.log(`  - Account: ${a.account} | Native Change: ${a.nativeBalanceChange || 0}`);
+                        if (Array.isArray(a.tokenBalanceChanges) && a.tokenBalanceChanges.length) {
+                            a.tokenBalanceChanges.forEach(t => {
+                                console.log(`     • Token: ${t.mint} | Amount: ${t.rawTokenAmount.tokenAmount} | From: ${t.userAccount} | To: ${t.tokenAccount}`);
+                            });
+                        }
+                    });
+                }
+                // Native transfers summary
+            
+                if (Array.isArray(tx.nativeTransfers) && tx.nativeTransfers.length) {
+                    console.log('• Native Transfers:');              
+                    tx.nativeTransfers.forEach(n => {                 
+                        console.log(`  - ${n.amount} lamports | From: ${n.fromUserAccount} | To: ${n.toUserAccount}`);
+                    });
+                }
+                
+                // Token transfers summary
+                if (Array.isArray(tx.tokenTransfers) && tx.tokenTransfers.length) {
+                    console.log('• Token Transfers:');
+                    tx.tokenTransfers.forEach(t =>  {
+                        console.log(`  - ${t.tokenAmount} | Mint: ${t.mint} | From: ${t.fromUserAccount} | To: ${t.toUserAccount}`);
+                    });
+                } 
+                // Instructions
+            
+                if (Array.isArray(tx.instructions)) {
+                    console.log('• Instructions Programs:', tx.instructions.map(ix => ix.programId).join(', ') || 'N/A');
+                }
+                console.log('──────────────────────────────');
+            });
+            this.logWithTimestamp(`📁 Helius payload logged to file: ${this.heliusLogPath}`);
         } catch (err) {
             this.logWithTimestamp('❌ Error writing to helius_data.log:', err);
         }
