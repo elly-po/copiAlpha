@@ -25,11 +25,7 @@ class CopyTradingBot {
             
             // Validate environment variables
             this.validateEnvironment();
-            
-            // Initialize database
-            console.log('📊 Initializing database...');
-            await this.waitForDatabase();
-            
+             
             // Start Telegram bot
             console.log('🤖 Initializing Telegram bot...');
             this.telegramBot = new TelegramBot();
