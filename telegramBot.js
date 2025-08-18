@@ -1485,18 +1485,6 @@ class TelegramBot {
             console.error("❌ Environment validation failed:", error.message);
             process.exit(1);
         }
-
-        this.bot.start({
-            drop_pending_updates: true,
-            onStart: (botInfo) => {
-                console.log("✅ Telegram bot started successfully");
-                console.log(`📱 Bot: @${botInfo.username}`);
-                console.log(`🆔 Bot ID: ${botInfo.id}`);
-                console.log(`🔒 Encryption: AES-256-GCM enabled`);
-                console.log(`📊 Max alpha wallets: ${this.config.MAX_ALPHA_WALLETS}`);
-            },
-        });
-
         return this.bot;
     }
 
