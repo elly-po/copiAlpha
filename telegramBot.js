@@ -185,23 +185,36 @@ class TelegramBot {
                 await this.handleStart(ctx);
             });
         });
-
-
-/*
-
-        
-        this.bot.command("start", async (ctx) => {
+        // help command  
+        this.bot.command("help", async (ctx) => {  
+            // Delete the user's /help command message  
+            try {  
+                if (ctx.message?.message_id) {  
+                    await this.deleteMessage(ctx, ctx.message.message_id);  
+                }  
+            } catch (err) {  
+                console.error("Failed to delete /help message:", err.message);  
+            }  
             await this.handleWithErrorCatch(ctx, async () => {
-                
-                await this.handleStart(ctx);
+                await this.handleHelp(ctx);
             });
         });
-*/
-        // Help command
-        this.bot.command("help", (ctx) => this.handleHelp(ctx));
 
-        // Status command
-        this.bot.command("status", (ctx) => this.handleWithErrorCatch(ctx, () => this.handleStatus(ctx)));
+
+        // Start command  
+        this.bot.command("status", async (ctx) => {  
+            // Delete the user's /status command message  
+            try {  
+                if (ctx.message?.message_id) {  
+                    await this.deleteMessage(ctx, ctx.message.message_id);  
+                }  
+            } catch (err) {  
+                console.error("Failed to delete /status message:", err.message);  
+            }  
+            await this.handleWithErrorCatch(ctx, async () => {
+                await this.handleStatus(ctx);
+            });
+        });
 
         // Global error handling
         this.bot.catch((err) => {
@@ -1065,7 +1078,7 @@ class TelegramBot {
                 const keyboard = new InlineKeyboard()
                     .text("📊 My Trades", "my_trades")
                     .text("🔙 Back", "main_menu");
-                await ctx.reply(`✅ Copying started! Helius will now track ${walletAddresses.length} alpha wallet(s).`,{reply_markup : keyboard} );
+                await ctx.reply(`✅ Copying started! copiAlpha bot will now Copy trade and push Alerts you for your ${walletAddresses.length} alpha wallet(s) When they act. You can no see trades @ 📊 My Trades `,{reply_markup : keyboard} );
             } else {
                 await ctx.reply("❌ Failed to start copying. Please try again later.");
             }
