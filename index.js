@@ -42,7 +42,6 @@ class CopyTradingBot {
                     console.log(`📱 Bot: @${botInfo.username}`);
                     console.log(`🆔 Bot ID: ${botInfo.id}`);
                     console.log(`🔒 Encryption: AES-256-GCM enabled`);
-                    console.log(`📊 Max alpha wallets: ${this.config.MAX_ALPHA_WALLETS}`);
                 },
             });
             
