@@ -37,7 +37,7 @@ class CopyTradingBot {
             
             // Start webhook server
             console.log('🌐 Starting webhook server...');
-            this.webhookServer = new WebhookServer(bot);
+            this.webhookServer = new WebhookServer();
             this.webhookServer.start();
             
             this.isRunning = true;
