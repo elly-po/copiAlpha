@@ -402,9 +402,19 @@ class TelegramBot {
         }
     }
 
-    async ensureUserSession(ctx) {
-        if (!ctx.session.user) {
-            return await this.initUser(ctx);
+    // Replace your current ensureUserSession with this
+    async ensureUserSession(ctx, { refresh = false } = {}) {
+        if (!ctx.session.user || refresh) {
+            const telegramId = ctx.from.id;
+            let user = await database.getUser(telegramId);
+            
+            if (!user) {
+                await database.createUser(telegramId);
+                user = await database.getUser(telegramId);
+            }
+            
+            if (!user) throw new Error("Failed to initialize user");
+            ctx.session.user = user;
         }
         return ctx.session.user;
     }
