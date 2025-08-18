@@ -102,16 +102,14 @@ class CopyTradingBot {
                     this.webhookServer.stop();
                 }
                 
-                // Close database connection
                 if (database.db) {
-                    console.log('📊 Closing database connection...');
-                    database.db.close((err) => {
-                        if (err) {
-                            console.error('Error closing database:', err);
-                        } else {
-                            console.log('✅ Database connection closed');
-                        }
-                    });
+                    try {
+                        console.log('📊 Closing database connection...');
+                        database.db.close(); // synchronous
+                        console.log('✅ Database connection closed');
+                    } catch (err) {
+                        console.error('Error closing database:', err);
+                    }
                 }
                 
                 console.log('✅ Bot shutdown complete');
