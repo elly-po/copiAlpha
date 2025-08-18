@@ -35,9 +35,10 @@ class CopyTradingBot {
             this.telegramBot = new TelegramBot();
             const botInstance = this.telegramBot.getBot();
                     
-            console.log("✅ Telegram bot started successfully");      
-            console.log(`📱 Bot: @${botInfo.username}`);       
-            console.log(`🆔 Bot ID: ${botInfo.id}`);      
+            console.log("✅ Telegram bot started successfully");
+            console.log(`📱 Bot token: @${process.env.BOT_TOKEN?.split(':')[0] || 'Unknown'}`);
+            //console.log(`📱 Bot: @${botInfo.username}`);       
+            //console.log(`🆔 Bot ID: ${botInfo.id}`);      
             console.log(`🔒 Encryption: AES-256-GCM enabled`);
             
             // Start webhook server
