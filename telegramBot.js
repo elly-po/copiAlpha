@@ -171,13 +171,32 @@ class TelegramBot {
     }
 
     setupHandlers() {
-        // Start command
-        this.bot.command("start", async (ctx) => {
+        // Start command  
+        this.bot.command("start", async (ctx) => {  
+            // Delete the user's /start command message  
+            try {  
+                if (ctx.message?.message_id) {  
+                    await this.deleteMessage(ctx, ctx.message.message_id);  
+                }  
+            } catch (err) {  
+                console.error("Failed to delete /start message:", err.message);  
+            }  
             await this.handleWithErrorCatch(ctx, async () => {
                 await this.handleStart(ctx);
             });
         });
 
+
+/*
+
+        
+        this.bot.command("start", async (ctx) => {
+            await this.handleWithErrorCatch(ctx, async () => {
+                
+                await this.handleStart(ctx);
+            });
+        });
+*/
         // Help command
         this.bot.command("help", (ctx) => this.handleHelp(ctx));
 
@@ -864,24 +883,8 @@ class TelegramBot {
         try {
             // Ensure the user exists and session is initialized
             const user = await this.initUser(ctx); // or ensureUserSession
-
+            // Show welcome message or main menu
             await this.showWelcome(ctx);
-
-            const alphaWallets = await database.getAlphaWallets(user.id);
-
-            // Determine the main menu buttons
-            const keyboard = new InlineKeyboard()
-            /*if (alphaWallets.length > 0) {
-                keyboard.row().text("🎯 Copy Now", "copy_now");
-            } else {
-                keyboard.row().text("➕ Add Alpha Wallet", "alpha_add");
-            }
-
-            // Show the main menu
-            /*await ctx.reply("🏠 Main Menu", {
-                reply_markup: keyboard,
-            });*/
-
         } catch (error) {
             console.error("Error in handleStart:", this.sanitizeError(error));
             await ctx.reply("❌ Error starting the bot. Please try again.");
@@ -1400,73 +1403,6 @@ class TelegramBot {
             return false;
         }
     }
-
-    /*// Database utility methods with better error handling
-    async getTotalTrades(userId) {
-        try {
-            return await new Promise((resolve, reject) => {
-                database.db.get(
-                    "SELECT COUNT(*) as count FROM trades WHERE user_id = ?",
-                    [userId],
-                    (err, row) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(row?.count || 0);
-                        }
-                    }
-                );
-            });
-        } catch (error) {
-            console.error('Error getting total trades:', this.sanitizeError(error));
-            return 0;
-        }
-    }
-
-    async getWinRate(userId) {
-        try {
-            const wins = await new Promise((resolve, reject) => {
-                database.db.get(
-                    "SELECT COUNT(*) as count FROM trades WHERE user_id = ? AND profit_loss > 0",
-                    [userId],
-                    (err, row) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(row?.count || 0);
-                        }
-                    }
-                );
-            });
-
-            const total = await this.getTotalTrades(userId);
-            return total > 0 ? Math.round((wins / total) * 100) : 0;
-        } catch (error) {
-            console.error('Error getting win rate:', this.sanitizeError(error));
-            return 0;
-        }
-    }
-
-    async getTotalPnL(userId) {
-        try {
-            return await new Promise((resolve, reject) => {
-                database.db.get(
-                    "SELECT SUM(profit_loss) as total FROM trades WHERE user_id = ?",
-                    [userId],
-                    (err, row) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(row?.total || 0);
-                        }
-                    }
-                );
-            });
-        } catch (error) {
-            console.error('Error getting total PnL:', this.sanitizeError(error));
-            return 0;
-        }
-    }*/
 
     // Bot lifecycle methods
     start() {
