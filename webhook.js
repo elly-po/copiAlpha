@@ -31,58 +31,57 @@ class WebhookServer {
     logWithTimestamp(...args) {
         console.log(new Date().toISOString(), ...args);
     }
-
+    
     logHeliusData(payload) {
         const entry = { timestamp: new Date().toISOString(), data: payload };
         try {
             // Save raw JSON to file
             fs.appendFileSync(this.heliusLogPath, JSON.stringify(entry) + '\n');
-            
+
             // Ensure we always work with an array
             const transactions = Array.isArray(payload) ? payload : [payload];
             
             transactions.forEach(tx => {
-                console.log('💾 Helius Transaction Summary:');
-                console.log('• Signature:', tx.signature || 'N/A');
-                console.log('• Fee Payer:', tx.feePayer || 'N/A');
-                console.log('• Slot:', tx.slot || 'N/A');
-                console.log('• Block Time:', tx.blockTime || 'N/A');
+                let summary = [];
+                summary.push(`Signature: ${tx.signature || 'N/A'}`);
+                summary.push(`FeePayer: ${tx.feePayer || 'N/A'}`);
+                summary.push(`Slot: ${tx.slot || 'N/A'}`);
+                summary.push(`BlockTime: ${tx.blockTime || 'N/A'}`);
                 
-                // Accounts and native changes
+                // Accounts + balance changes
                 if (Array.isArray(tx.accountData)) {
                     tx.accountData.forEach(a => {
-                        console.log(`  - Account: ${a.account} | Native Change: ${a.nativeBalanceChange || 0}`);
+                        summary.push(`Account: ${a.account}, NativeChange: ${a.nativeBalanceChange || 0}`);
                         if (Array.isArray(a.tokenBalanceChanges) && a.tokenBalanceChanges.length) {
                             a.tokenBalanceChanges.forEach(t => {
-                                console.log(`     • Token: ${t.mint} | Amount: ${t.rawTokenAmount.tokenAmount} | From: ${t.userAccount} | To: ${t.tokenAccount}`);
+                                summary.push(`Token: ${t.mint}, Amount: ${t.rawTokenAmount.tokenAmount}, From: ${t.userAccount}, To: ${t.tokenAccount}`);
                             });
                         }
                     });
                 }
-                // Native transfers summary
-            
+                
+                // Native transfers
                 if (Array.isArray(tx.nativeTransfers) && tx.nativeTransfers.length) {
-                    console.log('• Native Transfers:');              
-                    tx.nativeTransfers.forEach(n => {                 
-                        console.log(`  - ${n.amount} lamports | From: ${n.fromUserAccount} | To: ${n.toUserAccount}`);
+                    tx.nativeTransfers.forEach(n => {
+                        summary.push(`NativeTransfer: ${n.amount} lamports From ${n.fromUserAccount} → ${n.toUserAccount}`);
                     });
                 }
                 
-                // Token transfers summary
+                // Token transfers
                 if (Array.isArray(tx.tokenTransfers) && tx.tokenTransfers.length) {
-                    console.log('• Token Transfers:');
-                    tx.tokenTransfers.forEach(t =>  {
-                        console.log(`  - ${t.tokenAmount} | Mint: ${t.mint} | From: ${t.fromUserAccount} | To: ${t.toUserAccount}`);
+                    tx.tokenTransfers.forEach(t => {
+                        summary.push(`TokenTransfer: ${t.tokenAmount} Mint ${t.mint} From ${t.fromUserAccount} → ${t.toUserAccount}`);
                     });
-                } 
-                // Instructions
-            
-                if (Array.isArray(tx.instructions)) {
-                    console.log('• Instructions Programs:', tx.instructions.map(ix => ix.programId).join(', ') || 'N/A');
                 }
-                console.log('──────────────────────────────');
+                
+                // Instructions
+                if (Array.isArray(tx.instructions)) {
+                    summary.push(`Programs: ${tx.instructions.map(ix => ix.programId).join(', ') || 'N/A'}`);
+                }
+                console.log(`💾📙📒 Helius TX | ${summary.join(' | ')}`);
             });
-            this.logWithTimestamp(`📁 Helius payload logged to file: ${this.heliusLogPath}`);
+            
+            // this.logWithTimestamp(`📁 Helius payload logged to file: ${this.heliusLogPath}`);
         } catch (err) {
             this.logWithTimestamp('❌ Error writing to helius_data.log:', err);
         }
@@ -139,10 +138,10 @@ class WebhookServer {
     }
 
     async processWebhook(webhookData) {
-        this.logWithTimestamp('Processing webhook data...');
+        //this.logWithTimestamp('Processing webhook data...');
 
         const transactions = Array.isArray(webhookData) ? webhookData : [webhookData];
-        this.logWithTimestamp(`Received ${transactions.length} transaction(s) to process`);
+        this.logWithTimestamp(` ⤵️ Received ${transactions.length} transaction(s) to process`);
 
         // Fetch all active alpha wallets once
         let activeAlphaWallets = [];
@@ -154,19 +153,18 @@ class WebhookServer {
             return;
         }
 
-        for (const transaction of transactions) {
-            this.logWithTimestamp(`Scheduling processing for transaction: ${transaction.signature || 'N/A'}`);
+        for (const transaction of transactions){
             await this.processTransaction(transaction, activeAlphaWallets);
         }
 
-        this.logWithTimestamp('Finished processing webhook data');
+        this.logWithTimestamp('Finished processing webhook data', transaction.signature || 'N/A');
     }
 
     async processTransaction(transaction, activeAlphaWallets) {
         this.logWithTimestamp('Processing transaction:', transaction.signature || 'N/A');
 
         if (!this.heliusService.isSwapTransaction(transaction)) {
-            this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} is NOT a swap transaction, skipping`);
+            this.logWithTimestamp(`🚩🚩 Transaction ${transaction.signature || 'N/A'} is NOT a swap transaction, skipping`);
             return;
         }
 
