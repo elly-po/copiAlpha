@@ -135,7 +135,7 @@ class HeliusService {
 
     isSwapTransaction(transaction) {
         const isSwap = transaction.type === 'SWAP';
-        this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction`);
+        //this.logWithTimestamp(`Transaction ${transaction.signature} is ${isSwap ? '' : 'not '}a swap transaction`);
         return isSwap;
     }
 
