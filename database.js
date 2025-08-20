@@ -49,10 +49,12 @@ class DB {
                 alpha_wallet TEXT,
                 token_address TEXT,
                 token_symbol TEXT,
+                token_name TEXT,
                 side TEXT,
                 amount REAL,
                 price REAL,
                 signature TEXT,
+                jupiterQuote TEXT,
                 status TEXT DEFAULT 'pending',
                 profit_loss REAL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -65,6 +67,24 @@ class DB {
                 active INTEGER DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
+            )`,
+            `CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                token_address TEXT,
+                token_symbol TEXT,
+                total_amount REAL DEFAULT 0,
+                average_price REAL DEFAULT 0,
+                is_open INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME,
+                closed_at DATETIME
+            )`,
+            `CREATE TABLE IF NOT EXISTS blacklisted_tokens (
+                id INTEGER PRIMARY KEY,
+                token_address TEXT UNIQUE,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`
         ];
 
@@ -148,13 +168,13 @@ class DB {
     }
 
     // ---------------- Trade Methods ----------------
-    addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature, status = 'pending', profit_loss = 0 }) {
+    addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, tokenName, side, amount, price, signature, jupiterQuote, status = 'pending', profit_loss = 0 }) {
         try {
             return this.db.prepare(
                 `INSERT INTO trades 
-                 (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature, status, profit_loss) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature, status, profit_loss).lastInsertRowid;
+                 (user_id, alpha_wallet, token_address, token_symbol, token_name, side, amount, price, signature, jupiterQuote, status, profit_loss) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run(userId, alphaWallet, tokenAddress, tokenSymbol, tokenName, side, amount, price, signature, jupiterQuote, status, profit_loss).lastInsertRowid;
         } catch (err) {
             console.error("❌ addTrade failed:", err);
             throw err;
@@ -172,7 +192,6 @@ class DB {
         }
     }
 
-    // Get past buy trades by alpha wallet for a specific token
     getUserBuyTrades(userId, tokenAddress, alphaWallet) {
         try {
             return this.db.prepare(
@@ -190,7 +209,6 @@ class DB {
         }
     }
 
-    // ---------------- Aggregates ----------------
     getTotalTrades(userId) {
         try {
             const row = this.db.prepare('SELECT COUNT(*) AS count FROM trades WHERE user_id = ?').get(userId);
@@ -223,15 +241,49 @@ class DB {
         }
     }
 
-    // ---------------- Positions (Optional) ----------------
     getUserPosition(userId, tokenAddress) {
         try {
             return this.db.prepare(
-                'SELECT * FROM trades WHERE user_id = ? AND token_address = ? AND side = "buy" AND status = "completed" ORDER BY created_at DESC LIMIT 1'
+                'SELECT * FROM positions WHERE user_id = ? AND token_address = ? LIMIT 1'
             ).get(userId, tokenAddress);
         } catch (err) {
-            console.error("❌ getUserPosition failed:", err);
+            console.error('❌ getUserPosition failed:', err);
             return null;
+        }
+    }
+
+    createPosition(position) {
+        return this.db.prepare(`
+            INSERT INTO positions 
+            (user_id, token_address, token_symbol, total_amount, average_price, is_open, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            position.userId,
+            position.tokenAddress,
+            position.tokenSymbol,
+            position.totalAmount,
+            position.averagePrice,
+            position.isOpen ? 1 : 0,
+            position.createdAt
+        ).lastInsertRowid;
+    }
+
+    updatePosition(userId, tokenAddress, updates) {
+        const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+        const values = [...Object.values(updates), userId, tokenAddress];
+        this.db.prepare(`UPDATE positions SET ${fields} WHERE user_id = ? AND token_address = ?`).run(values);
+    }
+
+    getUserOpenPositions(userId) {
+        return this.db.prepare('SELECT * FROM positions WHERE user_id = ? AND is_open = 1').all(userId);
+    }
+
+    getBlacklistedTokens() {
+        try {
+            return this.db.prepare('SELECT token_address FROM blacklisted_tokens').all().map(r => r.token_address);
+        } catch (err) {
+            console.error('❌ getBlacklistedTokens failed:', err);
+            return [];
         }
     }
 }
