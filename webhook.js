@@ -157,7 +157,7 @@ class WebhookServer {
             await this.processTransaction(transaction, activeAlphaWallets);
         }
 
-        this.logWithTimestamp('Finished processing webhook data', transaction.signature || 'N/A');
+        this.logWithTimestamp(`Finished processing ${transactions.length} webhook transaction(s)`);
     }
 
     async processTransaction(transaction, activeAlphaWallets) {
