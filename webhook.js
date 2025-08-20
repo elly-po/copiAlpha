@@ -178,6 +178,13 @@ class WebhookServer {
                     this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Failed to extract swap details, skipping`);
                     continue;
                 }
+                
+                const { tokenIn, tokenOut, amountIn, amountOut } = swapDetails;
+                if (!tokenIn || !tokenOut || !amountIn || !amountOut || amountIn <= 0 || amountOut <= 0) {
+                    this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Invalid swap details (tokenIn/tokenOut/amountIn/amountOut missing or zero), skipping`);
+                    continue;
+                }
+
 
                 this.logWithTimestamp(`Swap detected for transaction ${transaction.signature || 'N/A'}:`, swapDetails);
                 await this.tradingEngine.processSwapSignal(swapDetails, account);
