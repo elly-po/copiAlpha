@@ -84,7 +84,7 @@ class TradingEngine {
             // Check existing position for this token
             let existingPosition = await this.getUserTokenPosition(user.id, tokenOut);
             // Calculate base trade amount
-            let userTradeAmount = await this.calculateTradeAmount(user, swapDetails);
+            let userTradeAmount = await this.calculateTradeAmount(user, swapDetails, alphaWallet);
 
             if (side === 'buy' && existingPosition && existingPosition.isOpen) {
                 // Scaling logic: add a fraction of alpha trade to existing position
@@ -160,7 +160,7 @@ class TradingEngine {
     async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3, inputDecimals = 9, outputDecimals = 9) {
         try {
             const amountInSmallestUnit = Math.floor(amount * Math.pow(10, inputDecimals));
-
+            
             const params = new URLSearchParams({
                 inputMint: tokenIn,
                 outputMint: tokenOut,
@@ -290,13 +290,18 @@ class TradingEngine {
 
     async getUserTokenPosition(userId, tokenAddress) {
         try {
-            return await database.getUserPosition(userId, tokenAddress);
+            const pos = await database.getUserPosition(userId, tokenAddress);
+            if (pos) {
+                // Transform database result to standardized position object
+                pos.isOpen = pos.is_open === 1 || pos.totalAmount > 0;
+            }
+            return pos || null;
         } catch (error) {
             console.error('Error getting user token position:', error);
             return null;
         }
     }
-
+    
     // Check if user should follow an alpha wallet's sell
     async checkAlphaWalletSell(user, tokenAddress, alphaWallet) {
         try {
@@ -337,14 +342,17 @@ class TradingEngine {
                 const maxAmount = user.max_trade_amount || 0.1;
                 const proportionalAmount = amountIn * 0.1; // 10% of alpha trade
                 return Math.min(maxAmount, proportionalAmount, 1.0);
-            } else {
-                // Sell orders: follow user's existing position
+            }
+            
+            if (side === 'sell') {
+                // Follow user's existing open position
                 const position = await this.getUserTokenPosition(user.id, tokenIn);
                 if (!position || !position.isOpen || position.totalAmount <= 0) return 0;
                 
                 // Sell up to 50% of user's position by default
                 return Math.min(position.totalAmount, position.totalAmount * 0.5);
             }
+            return 0; // unknown side
         } catch (error) {
             console.error('Error calculating trade amount:', error);
             return 0;
@@ -386,15 +394,17 @@ class TradingEngine {
 
     async checkAutoSellConditions(user, position) {
         try {
-            if (!user.auto_sell_enabled || !position.isOpen) return;
-
+            // Normalize position.isOpen in case this wasn't transformed earlier
+            const isOpen = position.isOpen || position.is_open === 1;
+            if (!user.auto_sell_enabled || !isOpen || position.totalAmount <= 0) return;
+            
             // Get current token price
             const currentPrice = await this.getCurrentTokenPrice(position.tokenAddress);
             if (!currentPrice || currentPrice <= 0) return;
-
+            
             const entryPrice = position.averagePrice;
             const currentProfitPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
-
+            
             console.log(`Position check: ${position.tokenSymbol} - Entry: ${entryPrice}, Current: ${currentPrice}, P&L: ${currentProfitPercent.toFixed(2)}%`);
 
             // Check for take profit
@@ -402,7 +412,6 @@ class TradingEngine {
                 await this.executeAutoSell(user, position, 'take_profit', currentPrice);
                 return;
             }
-
             // Check for stop loss
             if (currentProfitPercent <= -(user.stop_loss || 20)) {
                 await this.executeAutoSell(user, position, 'stop_loss', currentPrice);
@@ -416,24 +425,28 @@ class TradingEngine {
     async executeAutoSell(user, position, reason, currentPrice) {
         try {
             console.log(`Executing auto-sell for ${position.tokenSymbol}: ${reason}`);
-
             const tokenInfo = await this.getTokenInfo(position.tokenAddress);
-            if (!tokenInfo) return console.error('Failed to fetch token info for auto-sell');
-
-            // Quote with dynamic decimals
+            if (!tokenInfo) {
+                console.error('Failed to fetch token info for auto-sell');
+                return;
+            }
+            
+            // Get Jupiter quote (no need to manually pass decimals)
             const quote = await this.getJupiterQuote(
                 position.tokenAddress,
                 'So11111111111111111111111111111111111111112', // WSOL
                 position.totalAmount,
-                user.slippage || 3,
-                tokenInfo.decimals,
-                9 // WSOL decimals
+                user.slippage || 3
             );
-
-            if (!quote) return console.error('Failed to get quote for auto-sell');
-
+            
+            if (!quote) {
+                console.error('Failed to get quote for auto-sell');
+                return;
+            }
+            
+            // Execute swap
             const sellResult = await this.executeJupiterSwap(user.private_key, quote);
-
+            
             if (sellResult.success) {
                 const tradeData = {
                     userId: user.id,
@@ -445,13 +458,14 @@ class TradingEngine {
                     amount: position.totalAmount,
                     price: currentPrice,
                     signature: sellResult.signature,
+                    jupiterQuote: JSON.stringify(quote),
                     status: 'completed',
                     autoSellReason: reason
                 };
-
+                
                 await database.addTrade(tradeData);
                 await this.updateUserPosition(user.id, tradeData);
-
+                
                 const profitLoss = ((currentPrice - position.averagePrice) / position.averagePrice) * 100;
                 const message = `
 🔔 <b>Auto-Sell Executed!</b>
@@ -463,16 +477,21 @@ class TradingEngine {
 📈 <b>P&L:</b> ${profitLoss >= 0 ? '🟢' : '🔴'} ${profitLoss.toFixed(2)}%
 🔗 <b>Signature:</b> <code>${sellResult.signature}</code>
 ⏰ <i>${new Date().toLocaleString()}</i>
-                `;
+            `;
                 await this.notifyUser(user.telegram_id, message);
             } else {
                 console.error('Auto-sell execution failed:', sellResult.error);
-                await this.notifyUser(user.telegram_id, `⚠️ Auto-sell failed for ${position.tokenSymbol}: ${sellResult.error}`);
+                await this.notifyUser(
+                    user.telegram_id,
+                    `⚠️ Auto-sell failed for ${position.tokenSymbol}: ${sellResult.error}`
+                );
             }
-
         } catch (error) {
             console.error('Error executing auto-sell:', error);
-            await this.notifyUser(user.telegram_id, `❌ Auto-sell error for ${position.tokenSymbol}: ${error.message}`);
+            await this.notifyUser(
+                user.telegram_id,
+                `❌ Auto-sell error for ${position.tokenSymbol}: ${error.message}`
+            );
         }
     }
 
@@ -595,6 +614,14 @@ ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
                 const balance = await this.solanaService.getWalletBalance(user.wallet_address);
                 if (balance < userTradeAmount + 0.01) { // Leave 0.01 SOL for fees
                     console.log('Insufficient balance for trade');
+                    return false;
+                }
+            }
+
+            if (side === 'sell') {
+                const position = await this.getUserTokenPosition(user.id, tokenIn);
+                if (!position || !position.isOpen || position.totalAmount <= 0) {
+                    console.log('No open position to sell, skipping');
                     return false;
                 }
             }
