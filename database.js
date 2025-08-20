@@ -1,28 +1,22 @@
+//database.js
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
 // Ensure the data folder exists
 const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir);
-    console.log('📁 Created data directory at:', dataDir);
-}
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
 
 class DB {
     constructor() {
         const dbPath = path.join(dataDir, 'bot.db');
-        console.log('🗄  Using database file at:', dbPath);
-
         try {
             this.db = new Database(dbPath);
             console.log("✅ Database opened successfully at:", dbPath);
-            console.log("✅ Database initialized and ready for queries");
         } catch (err) {
             console.error("❌ Failed to open database:", err);
             throw err;
         }
-
         this.initTables();
     }
 
@@ -47,7 +41,7 @@ class DB {
                 nickname TEXT,
                 active INTEGER DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )`,
             `CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY,
@@ -62,7 +56,7 @@ class DB {
                 status TEXT DEFAULT 'pending',
                 profit_loss REAL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )`,
             `CREATE TABLE IF NOT EXISTS webhooks (
                 id INTEGER PRIMARY KEY,
@@ -70,7 +64,7 @@ class DB {
                 user_id INTEGER,
                 active INTEGER DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )`
         ];
 
@@ -83,12 +77,10 @@ class DB {
         }
     }
 
-    // User methods
+    // ---------------- User Methods ----------------
     getUser(telegramId) {
         try {
-            return this.db.prepare(
-                'SELECT * FROM users WHERE telegram_id = ?'
-            ).get(telegramId);
+            return this.db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
         } catch (err) {
             console.error("❌ getUser failed:", err);
             return null;
@@ -97,10 +89,7 @@ class DB {
 
     createUser(telegramId) {
         try {
-            const stmt = this.db.prepare(
-                'INSERT INTO users (telegram_id) VALUES (?)'
-            );
-            return stmt.run(telegramId).lastInsertRowid;
+            return this.db.prepare('INSERT INTO users (telegram_id) VALUES (?)').run(telegramId).lastInsertRowid;
         } catch (err) {
             console.error("❌ createUser failed:", err);
             throw err;
@@ -118,7 +107,7 @@ class DB {
         }
     }
 
-    // Alpha Wallet methods
+    // ---------------- Alpha Wallet Methods ----------------
     addAlphaWallet(userId, walletAddress, nickname) {
         try {
             return this.db.prepare(
@@ -132,9 +121,7 @@ class DB {
 
     getAlphaWallets(userId) {
         try {
-            return this.db.prepare(
-                'SELECT * FROM alpha_wallets WHERE user_id = ? AND active = 1'
-            ).all(userId);
+            return this.db.prepare('SELECT * FROM alpha_wallets WHERE user_id = ? AND active = 1').all(userId);
         } catch (err) {
             console.error("❌ getAlphaWallets failed:", err);
             return [];
@@ -143,10 +130,8 @@ class DB {
 
     getAllActiveAlphaWallets() {
         try {
-            const rows = this.db.prepare(
-                'SELECT wallet_address FROM alpha_wallets WHERE active = 1'
-            ).all();
-            return rows.map(r => r.wallet_address);
+            return this.db.prepare('SELECT wallet_address FROM alpha_wallets WHERE active = 1').all()
+                      .map(r => r.wallet_address);
         } catch (err) {
             console.error("❌ getAllActiveAlphaWallets failed:", err);
             return [];
@@ -155,23 +140,21 @@ class DB {
 
     deleteAlphaWallet(id) {
         try {
-            this.db.prepare(
-                'UPDATE alpha_wallets SET active = 0 WHERE id = ?'
-            ).run(id);
+            this.db.prepare('UPDATE alpha_wallets SET active = 0 WHERE id = ?').run(id);
         } catch (err) {
             console.error("❌ deleteAlphaWallet failed:", err);
             throw err;
         }
     }
 
-    // Trade methods
-    addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature }) {
+    // ---------------- Trade Methods ----------------
+    addTrade({ userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature, status = 'pending', profit_loss = 0 }) {
         try {
             return this.db.prepare(
                 `INSERT INTO trades 
-                (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-            ).run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature).lastInsertRowid;
+                 (user_id, alpha_wallet, token_address, token_symbol, side, amount, price, signature, status, profit_loss) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).run(userId, alphaWallet, tokenAddress, tokenSymbol, side, amount, price, signature, status, profit_loss).lastInsertRowid;
         } catch (err) {
             console.error("❌ addTrade failed:", err);
             throw err;
@@ -189,12 +172,28 @@ class DB {
         }
     }
 
-    // Aggregates
+    // Get past buy trades by alpha wallet for a specific token
+    getUserBuyTrades(userId, tokenAddress, alphaWallet) {
+        try {
+            return this.db.prepare(
+                `SELECT * FROM trades
+                 WHERE user_id = ?
+                 AND token_address = ?
+                 AND alpha_wallet = ?
+                 AND side = 'buy'
+                 AND status = 'completed'
+                 ORDER BY created_at ASC`
+            ).all(userId, tokenAddress, alphaWallet);
+        } catch (err) {
+            console.error("❌ getUserBuyTrades failed:", err);
+            return [];
+        }
+    }
+
+    // ---------------- Aggregates ----------------
     getTotalTrades(userId) {
         try {
-            const row = this.db.prepare(
-                'SELECT COUNT(*) AS count FROM trades WHERE user_id = ?'
-            ).get(userId);
+            const row = this.db.prepare('SELECT COUNT(*) AS count FROM trades WHERE user_id = ?').get(userId);
             return row?.count || 0;
         } catch (err) {
             console.error("❌ getTotalTrades failed:", err);
@@ -204,9 +203,7 @@ class DB {
 
     getWinRate(userId) {
         try {
-            const winsRow = this.db.prepare(
-                'SELECT COUNT(*) AS count FROM trades WHERE user_id = ? AND profit_loss > 0'
-            ).get(userId);
+            const winsRow = this.db.prepare('SELECT COUNT(*) AS count FROM trades WHERE user_id = ? AND profit_loss > 0').get(userId);
             const wins = winsRow?.count || 0;
             const total = this.getTotalTrades(userId);
             return total > 0 ? Math.round((wins / total) * 100) : 0;
@@ -218,13 +215,23 @@ class DB {
 
     getTotalPnL(userId) {
         try {
-            const row = this.db.prepare(
-                'SELECT SUM(profit_loss) AS total FROM trades WHERE user_id = ?'
-            ).get(userId);
+            const row = this.db.prepare('SELECT SUM(profit_loss) AS total FROM trades WHERE user_id = ?').get(userId);
             return row?.total || 0;
         } catch (err) {
             console.error("❌ getTotalPnL failed:", err);
             return 0;
+        }
+    }
+
+    // ---------------- Positions (Optional) ----------------
+    getUserPosition(userId, tokenAddress) {
+        try {
+            return this.db.prepare(
+                'SELECT * FROM trades WHERE user_id = ? AND token_address = ? AND side = "buy" AND status = "completed" ORDER BY created_at DESC LIMIT 1'
+            ).get(userId, tokenAddress);
+        } catch (err) {
+            console.error("❌ getUserPosition failed:", err);
+            return null;
         }
     }
 }
