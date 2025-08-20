@@ -144,31 +144,30 @@ class TradingEngine {
             await this.notifyUser(user.telegram_id, `❌ Trade execution failed: ${error.message}`);
         }
     }
-
-    // Jupiter API Integration
-    async getJupiterQuote(inputMint, outputMint, amount, slippage = 3) {
+    
+    async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3) {
         try {
-            const amountInSmallestUnit = Math.floor(amount * Math.pow(10, 9)); // Assuming 9 decimals for SOL
-
+            const amountInSmallestUnit = Math.floor(amount * Math.pow(10, 9));
+            
             const params = new URLSearchParams({
-                inputMint,
-                outputMint,
+                inputMint: tokenIn,
+                outputMint: tokenOut,
                 amount: amountInSmallestUnit.toString(),
-                slippageBps: Math.floor(slippage * 100).toString(), // Convert percentage to basis points
+                slippageBps: Math.floor(slippage * 100).toString(), // convert % to basis points
                 onlyDirectRoutes: 'false',
                 asLegacyTransaction: 'false'
             });
-
+            
             const response = await axios.get(`${this.jupiterConfig.baseURL}/quote`, {
                 params,
                 timeout: this.jupiterConfig.timeout
             });
-
+            
             if (response.data && response.data.routePlan) {
-                console.log(`Jupiter quote obtained: ${amount} ${inputMint} -> ${response.data.outAmount} ${outputMint}`);
+                console.log(`Jupiter quote obtained: ${amount} ${tokenIn} -> ${response.data.outAmount} ${tokenOut}`);
                 return response.data;
             }
-
+            
             return null;
         } catch (error) {
             console.error('Error getting Jupiter quote:', error.message);
