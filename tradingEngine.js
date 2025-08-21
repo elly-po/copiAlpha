@@ -213,21 +213,24 @@ class TradingEngine {
         }
     }
 
-    async getTokenDecimals(mintAddress) {
+    async getTokenDecimals(tokenAddress) {
         try {
-            const mintPubkey = new PublicKey(mintAddress);
-            const mintAccountInfo = await this.solanaService.connection.getParsedAccountInfo(mintPubkey);
+            const info = await this.getTokenInfo(tokenAddress);
+            if (info?.decimals !== undefined) return info.decimals;
             
-            const decimals = mintAccountInfo.value?.data?.parsed?.info?.decimals;
-            if (decimals === undefined) {
-                throw new Error(`Failed to fetch decimals for token: ${mintAddress}`);
+            try {
+                const pubkey = new PublicKey(tokenAddress);
+                const accountInfo = await this.solanaService.connection.getParsedAccountInfo(pubkey);
+                const decimals = accountInfo.value?.data?.parsed?.info?.decimals;
+                if (decimals !== undefined) return decimals;
+            } catch (innerErr) {
+                console.warn(`Not a valid public key, skipping on-chain check: ${tokenAddress}`);
             }
-            return decimals;
-        } catch (error) {
-            console.error('Error fetching token decimals:', error.message);
-            // Default fallback (optional)
-            return 9;
+        } catch (err) {
+            console.warn(`Could not fetch decimals for token ${tokenAddress}: ${err.message}`);
         }
+        console.warn(`Using default decimals=9 for ${tokenAddress}`);
+        return 9;
     }
 
     async executeJupiterSwap(privateKey, quote) {
