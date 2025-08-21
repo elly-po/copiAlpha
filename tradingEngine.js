@@ -270,22 +270,37 @@ class TradingEngine {
         }
     }
 
-    //getTokenInfo with cache
     async getTokenInfo(tokenAddress) {
         try {
             if (!this.tokenInfoCache) this.tokenInfoCache = new Map();
-            if (this.tokenInfoCache.has(tokenAddress)) return this.tokenInfoCache.get(tokenAddress);
+            if (this.tokenInfoCache.has(tokenAddress)) {
+                console.log(`Token info cache hit for ${tokenAddress}`, this.tokenInfoCache.get(tokenAddress));
+                return this.tokenInfoCache.get(tokenAddress);
+            }
             
+            console.log(`Fetching token info from Jupiter for: ${tokenAddress}`);
             const response = await axios.get(`https://token.jup.ag/strict`, { timeout: 5000 });
+            
+            console.log(`Jupiter token list fetched, total tokens: ${response.data.length}`);
             const tokenInfo = response.data.find(t => t.address === tokenAddress);
             
-            const result = tokenInfo
-                ? { symbol: tokenInfo.symbol, name: tokenInfo.name, decimals: tokenInfo.decimals, logoURI: tokenInfo.logoURI }
-                : await this.solanaService.getTokenMetadata(tokenAddress);
+            let result;
+            if (tokenInfo) {
+                result = { 
+                    symbol: tokenInfo.symbol, 
+                    name: tokenInfo.name, 
+                    decimals: tokenInfo.decimals, 
+                    logoURI: tokenInfo.logoURI 
+                };
+                console.log(`Token info found on Jupiter:`, result);
+            } else {
+                console.log(`Token ${tokenAddress} not found on Jupiter, fetching on-chain metadata`);
+                result = await this.solanaService.getTokenMetadata(tokenAddress);
+                console.log(`On-chain token metadata:`, result);
+            }
             
             if (result) this.tokenInfoCache.set(tokenAddress, result);
             return result;
-        
         } catch (error) {
             console.error('Error getting token info:', error);
             return null;
