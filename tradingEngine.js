@@ -157,8 +157,11 @@ class TradingEngine {
         }
     }
 
-    async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3, inputDecimals = 9, outputDecimals = 9) {
+    async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3) {
         try {
+            const inputDecimals = await this.getTokenDecimals(tokenIn);
+            const outputDecimals = await this.getTokenDecimals(tokenOut);
+            
             const amountInSmallestUnit = Math.floor(amount * Math.pow(10, inputDecimals));
             
             const params = new URLSearchParams({
@@ -169,23 +172,61 @@ class TradingEngine {
                 onlyDirectRoutes: 'false',
                 asLegacyTransaction: 'false'
             });
-
-            const response = await axios.get(`${this.jupiterConfig.baseURL}/quote`, {
+            
+            const url = `${this.jupiterConfig.baseURL}/quote`;
+            
+            const response = await axios.get(url, {
                 params,
                 timeout: this.jupiterConfig.timeout
             });
-
-            if (response.data && response.data.routePlan) {
-                // Adjust outAmount using output decimals
-                response.data.outAmount = parseFloat(response.data.outAmount) / Math.pow(10, outputDecimals);
-                console.log(`Jupiter quote obtained: ${amount} ${tokenIn} -> ${response.data.outAmount} ${tokenOut}`);
-                return response.data;
+            
+            if (!response.data?.routePlan || response.data.routePlan.length === 0) {
+                console.warn(`⚠️ Jupiter responded but no routePlan found for ${tokenIn} -> ${tokenOut}`, {
+                    responseData: response.data,
+                    requestUrl: url,
+                    requestParams: params.toString()
+                });
+                return null;
             }
-
-            return null;
+            
+            // Normalize output using actual decimals
+            response.data.outAmount = parseFloat(response.data.outAmount) / Math.pow(10, outputDecimals);
+            console.log(`Jupiter quote obtained: ${amount} ${tokenIn} -> ${response.data.outAmount} ${tokenOut}`);
+            return response.data;
         } catch (error) {
-            console.error('Error getting Jupiter quote:', error.message);
+            const status = error?.response?.status;
+            const statusText = error?.response?.statusText;
+            const data = error?.response?.data;
+            
+            console.error('Error getting Jupiter quote', {
+                message: error.message,
+                status,
+                statusText,
+                data,
+                tokenIn,
+                tokenOut,
+                amount,
+                params: params?.toString(),
+                url: `${this.jupiterConfig.baseURL}/quote`
+            });
             return null;
+        }
+    }
+
+    async getTokenDecimals(mintAddress) {
+        try {
+            const mintPubkey = new PublicKey(mintAddress);
+            const mintAccountInfo = await this.solanaService.connection.getParsedAccountInfo(mintPubkey);
+            
+            const decimals = mintAccountInfo.value?.data?.parsed?.info?.decimals;
+            if (decimals === undefined) {
+                throw new Error(`Failed to fetch decimals for token: ${mintAddress}`);
+            }
+            return decimals;
+        } catch (error) {
+            console.error('Error fetching token decimals:', error.message);
+            // Default fallback (optional)
+            return 9;
         }
     }
 
