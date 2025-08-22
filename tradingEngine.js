@@ -235,7 +235,7 @@ class TradingEngine {
 
     async executeJupiterSwap(privateKey, quote) {
         try {
-            const decryptedPrivateKey = this.bot.decryptPrivateKey(privateKey);
+            const decryptedPrivateKey = this.telegramBot.decryptPrivateKey(privateKey);
             if (!decryptedPrivateKey) throw new Error('Failed to decrypt private key');
 
             const swapResponse = await axios.post(this.jupiterConfig.swapURL, {
