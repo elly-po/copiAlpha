@@ -31,7 +31,7 @@ class CopyTradingBot {
             this.telegramBot = new TelegramBot();
             await this.telegramBot.init()
             
-            //const botInstance = this.telegramBot.getBot();
+            const botInstance = this.telegramBot.getBot();
                     
             console.log("✅ Telegram bot started successfully");
             console.log(`📱 Bot token: @${process.env.BOT_TOKEN?.split(':')[0] || 'Unknown'}`);
@@ -41,8 +41,7 @@ class CopyTradingBot {
 
             // Start webhook server
             console.log('🌐 Starting webhook server...');
-            this.webhookServer = new WebhookServer(this.telegramBot);
-            //this.webhookServer = new WebhookServer(botInstance);
+            this.webhookServer = new WebhookServer(botInstance);
             this.webhookServer.start();
             
             this.isRunning = true;
