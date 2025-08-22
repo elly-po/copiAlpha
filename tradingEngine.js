@@ -272,12 +272,16 @@ class TradingEngine {
 
     async getTokenInfo(tokenAddress) {
         try {
+            // ✅ Normalize "SOL" into wrapped SOL mint
+            if (tokenAddress === "SOL") {
+                tokenAddress = "So11111111111111111111111111111111111111112";
+            }
+            
             if (!this.tokenInfoCache) this.tokenInfoCache = new Map();
             if (this.tokenInfoCache.has(tokenAddress)) {
                 console.log(`Token info cache hit for ${tokenAddress}`, this.tokenInfoCache.get(tokenAddress));
                 return this.tokenInfoCache.get(tokenAddress);
             }
-            
             console.log(`Fetching token info from Jupiter for: ${tokenAddress}`);
             const response = await axios.get(`https://token.jup.ag/strict`, { timeout: 5000 });
             
@@ -298,7 +302,6 @@ class TradingEngine {
                 result = await this.solanaService.getTokenMetadata(tokenAddress);
                 console.log(`On-chain token metadata:`, result);
             }
-            
             if (result) this.tokenInfoCache.set(tokenAddress, result);
             return result;
         } catch (error) {
