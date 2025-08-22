@@ -117,5 +117,6 @@ class SolanaService {
             };
         }
     }
+}
 
 module.exports = SolanaService;
