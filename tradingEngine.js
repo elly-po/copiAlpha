@@ -158,6 +158,9 @@ class TradingEngine {
     }
 
     async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3) {
+        let params; 
+        const url = `${this.jupiterConfig.baseURL}/quote`;
+
         try {
             const inputDecimals = await this.getTokenDecimals(tokenIn);
             const outputDecimals = await this.getTokenDecimals(tokenOut);
@@ -172,9 +175,7 @@ class TradingEngine {
                 onlyDirectRoutes: 'false',
                 asLegacyTransaction: 'false'
             });
-            
-            const url = `${this.jupiterConfig.baseURL}/quote`;
-            
+                        
             const response = await axios.get(url, {
                 params,
                 timeout: this.jupiterConfig.timeout
@@ -207,7 +208,7 @@ class TradingEngine {
                 tokenOut,
                 amount,
                 params: params?.toString(),
-                url: `${this.jupiterConfig.baseURL}/quote`
+                url
             });
             return null;
         }
