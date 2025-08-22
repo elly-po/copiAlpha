@@ -61,15 +61,23 @@ class SolanaService {
         }
     }
 
-    // ✅ NEW FUNCTION with Metaplex support
     async getTokenMetadata(mintAddress) {
         try {
+            // ✅ Special-case for SOL
+            if (mintAddress === "So11111111111111111111111111111111111111112" || mintAddress === "SOL") {
+                return {
+                    mint: "So11111111111111111111111111111111111111112",
+                    name: "Solana",
+                    symbol: "SOL",
+                    decimals: 9,
+                    logoURI: "https://cryptologos.cc/logos/solana-sol-logo.png"
+                };
+            }
+            
             const mintPubkey = new PublicKey(mintAddress);
-
-            // Fetch decimals from mint account
             const mintInfo = await this.limiter.schedule(() => getMint(this.connection, mintPubkey));
-
-            // Derive PDA for metadata account
+            
+            // Derive PDA for metadata
             const [metadataPDA] = await PublicKey.findProgramAddress(
                 [
                     Buffer.from("metadata"),
@@ -78,36 +86,36 @@ class SolanaService {
                 ],
                 METADATA_PROGRAM_ID
             );
-
-            // Fetch account info
+            
             const accountInfo = await this.connection.getAccountInfo(metadataPDA);
             let name = "Unknown Token";
             let symbol = "UNKNOWN";
             let uri = null;
-
+            
             if (accountInfo?.data) {
-                // Decode Metaplex metadata (it’s Borsh serialized)
                 const data = accountInfo.data;
-
-                // name: 32 bytes, symbol: 10 bytes, uri: 200 bytes
-                // (Metaplex V1 layout, quick + dirty parsing)
-                name = data.slice(1, 33).toString().replace(/\0/g, "");
-                symbol = data.slice(33, 43).toString().replace(/\0/g, "");
-                uri = data.slice(43, 243).toString().replace(/\0/g, "");
+                name = data.slice(1, 33).toString().replace(/\0/g, "") || name;
+                symbol = data.slice(33, 43).toString().replace(/\0/g, "") || symbol;
+                uri = data.slice(43, 243).toString().replace(/\0/g, "") || null;
             }
-
+            
             return {
                 mint: mintAddress,
                 name,
                 symbol,
-                decimals: mintInfo.decimals,
-                logoURI: uri // sometimes points to JSON with "image"
+                decimals: mintInfo.decimals ?? 9,
+                logoURI: uri
             };
         } catch (error) {
-            console.error("Error fetching on-chain metadata for:", mintAddress, error);
-            return null;
+            console.warn(`⚠️ Metadata fetch failed for ${mintAddress}: ${error.message}`);
+            return {
+                mint: mintAddress,
+                name: "Unknown Token",
+                symbol: "UNKNOWN",
+                decimals: 9,
+                logoURI: null
+            };
         }
     }
-}
 
 module.exports = SolanaService;
