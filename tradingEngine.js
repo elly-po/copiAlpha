@@ -6,7 +6,7 @@ const { PublicKey } = require('@solana/web3.js');
 
 class TradingEngine {
     constructor(bot) {
-        this.telegramBot = TelegramBot;
+        this.bot = bot;
         this.solanaService = new SolanaService();
         this.activeUsers = new Map();
         this.positions = new Map();
@@ -207,7 +207,7 @@ class TradingEngine {
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
             // === AXIOM-SPECIFIC SWAP ===
-            const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+            const decryptedKey = this.bot.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
@@ -320,7 +320,7 @@ class TradingEngine {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+                const decryptedKey = this.bot.decryptPrivateKey(user.private_key);
                 const exec = await this.solanaService.executeAxiom({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
@@ -674,7 +674,7 @@ class TradingEngine {
             }
 
             const wsol = 'So11111111111111111111111111111111111111112';
-            const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+            const decryptedKey = this.bot.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
