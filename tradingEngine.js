@@ -5,12 +5,20 @@ const Bottleneck = require('bottleneck');
 const { PublicKey } = require('@solana/web3.js');
 
 class TradingEngine {
-    constructor(telegramBotInstance) {
-        this.telegramBot = telegramBotInstance;
-        this.bot = telegramBotInstance.getBot();
+    constructor(bot) {
+        this.bot = bot;
         this.solanaService = new SolanaService();
         this.activeUsers = new Map();
         this.positions = new Map();
+        this.config = {
+            ENCRYPTION: {
+                ALGORITHM: 'aes-256-gcm',
+                KEY_LENGTH: 32,
+                IV_LENGTH: 16,
+                TAG_LENGTH: 16,
+                SALT: 'solana-bot-salt'
+            }
+        }
 
         // Enhanced caching
         this.tokenInfoCache = new Map();
@@ -159,6 +167,50 @@ class TradingEngine {
         }
     }
 
+    decryptPrivateKey(encryptedKey) {
+        try {
+            if (!encryptedKey || typeof encryptedKey !== 'string') {
+                throw new Error('Invalid encrypted key format');
+            }
+
+            const parts = encryptedKey.split(':');
+            if (parts.length !== 3) {
+                throw new Error('Invalid encrypted key format');
+            }
+
+            const [ivHex, tagHex, encryptedData] = parts;
+            const key = this.getEncryptionKey();
+            const iv = Buffer.from(ivHex, 'hex');
+            const tag = Buffer.from(tagHex, 'hex');
+
+            const decipher = crypto.createDecipheriv(this.config.ENCRYPTION.ALGORITHM, key, iv);
+            decipher.setAuthTag(tag);
+
+            let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+
+            return decrypted;
+        } catch (error) {
+            console.error('Decryption error:', this.sanitizeError(error));
+            return null;
+        }
+    }
+
+    getEncryptionKey() {
+        const key = process.env.ENCRYPTION_KEY;
+        if (!key || key === 'default-key') {
+            throw new Error('ENCRYPTION_KEY environment variable must be set and cannot be "default-key"');
+        }
+        return crypto.scryptSync(key, this.config.ENCRYPTION.SALT, this.config.ENCRYPTION.KEY_LENGTH);
+    }
+
+    sanitizeError(error) {
+        if (!error) return 'Unknown error';
+        const errorStr = error.toString();
+        // Remove potential sensitive information
+        return errorStr.replace(/private_key|secret|token|key/gi, '[REDACTED]');
+    }
+
     // === MAIN COPY-TRADE EXECUTION ===
     async executeCopyTrade(user, swapDetails, alphaWallet) {
         try {
@@ -208,7 +260,7 @@ class TradingEngine {
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
             // === AXIOM-SPECIFIC SWAP ===
-            const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+            const decryptedKey = this.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
@@ -321,7 +373,7 @@ class TradingEngine {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+                const decryptedKey = this.decryptPrivateKey(user.private_key);
                 const exec = await this.solanaService.executeAxiom({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
@@ -675,7 +727,7 @@ class TradingEngine {
             }
 
             const wsol = 'So11111111111111111111111111111111111111112';
-            const decryptedKey = this.telegramBot.decryptPrivateKey(user.private_key);
+            const decryptedKey = this.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
