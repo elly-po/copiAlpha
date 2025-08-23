@@ -1,5 +1,6 @@
 // solanaService.js
-const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const bs58 = require('bs58');
 const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getMint } = require('@solana/spl-token');
 const Bottleneck = require('bottleneck');
 
