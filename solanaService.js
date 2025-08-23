@@ -165,10 +165,10 @@ class SolanaService {
         }
     }
     
-    async executeAxiom({ userPrivateKeyEncrypted, tokenIn, tokenOut, amountIn, minOut, routeInfo }) {
+    async executeAxiom({ userPrivateKey, tokenIn, tokenOut, amountIn, minOut, routeInfo }) {
         try {
             // Decode private key
-            const privateKeyBytes = bs58.decode(userPrivateKeyEncrypted);
+            const privateKeyBytes = bs58.decode(userPrivateKey);
             const keypair = {
                 publicKey: new PublicKey(privateKeyBytes.slice(32)),
                 secretKey: privateKeyBytes
