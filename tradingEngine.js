@@ -207,8 +207,9 @@ class TradingEngine {
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
             // === AXIOM-SPECIFIC SWAP ===
+            const decryptedKey = this.bot.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
-                user.private_key,
+                decryptedKey,
                 {
                     tokenIn,
                     tokenOut,
@@ -672,8 +673,9 @@ class TradingEngine {
             }
 
             const wsol = 'So11111111111111111111111111111111111111112';
+            const decryptedKey = this.bot.decryptPrivateKey(user.private_key);
             const exec = await this.executeAxiomSwapWithRetry(
-                user.private_key,
+                decryptedKey,
                 {
                     tokenIn: position.tokenAddress,
                     tokenOut: wsol,
