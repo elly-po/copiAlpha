@@ -3,6 +3,7 @@ const SolanaService = require('./solanaService');
 const database = require('./database');
 const Bottleneck = require('bottleneck');
 const { PublicKey } = require('@solana/web3.js');
+const crypto = require('crypto');
 
 class TradingEngine {
     constructor(bot) {
