@@ -262,7 +262,7 @@ class TradingEngine {
 
             // === AXIOM-SPECIFIC SWAP ===
             const decryptedKey = this.decryptPrivateKey(user.private_key);
-            this.logWithTimestamp("Decrypted key type:", typeof decryptedKey, "length:", decryptedKey?.length);
+            this.logWithTimestamp("Decrypted key type:", typeof decryptedKey, "length:", decryptedKey?.length,"key:", decryptedKey);
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
