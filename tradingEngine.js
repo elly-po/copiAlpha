@@ -374,7 +374,6 @@ class TradingEngine {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const decryptedKey = this.decryptPrivateKey(userPrivateKey);
                 const exec = await this.solanaService.executeAxiom({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
