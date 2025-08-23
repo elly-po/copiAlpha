@@ -1,40 +1,45 @@
+// tradingEngine.js
 const SolanaService = require('./solanaService');
 const database = require('./database');
 const Bottleneck = require('bottleneck');
-const axios = require('axios');
-const { Connection, PublicKey, Transaction } = require('@solana/web3.js');
+const { PublicKey } = require('@solana/web3.js');
 
 class TradingEngine {
     constructor(bot) {
         this.bot = bot;
         this.solanaService = new SolanaService();
-        this.activeUsers = new Map(); // Cache active users
-        this.positions = new Map(); // Track user positions for auto-sell
-        
-        // Jupiter API configuration
-        this.jupiterConfig = {
-            baseURL: 'https://quote-api.jup.ag/v6',
-            swapURL: 'https://quote-api.jup.ag/v6/swap',
-            timeout: 10000
-        };
+        this.activeUsers = new Map();  // cache active users
+        this.positions = new Map();    // user positions cache
 
-        // Rate limiter for trade execution
+        // ⏱️ rate limiter for trade execution
         this.tradeLimiter = new Bottleneck({
             maxConcurrent: 3,
-            minTime: 1000 // 1 second between trades
+            minTime: 1000
         });
 
-        // Position monitoring interval
+        // position monitoring
         this.positionMonitorInterval = null;
         this.startPositionMonitoring();
     }
 
+    logWithTimestamp(...args) {
+        console.log(new Date().toISOString(), ...args);
+    }
+
+    // === ENTRYPOINT FROM WEBHOOK ===
     async processSwapSignal(swapDetails, alphaWallet) {
         try {
-            console.log('Processing swap signal |', 
-                Object.entries({ swapDetails, alphaWallet })
-                      .map(([k,v]) => `${k}:${JSON.stringify(v)}`)
-                      .join(' | ')
+            this.logWithTimestamp(
+                'Processing swap signal',
+                JSON.stringify({
+                    alphaWallet,
+                    signature: swapDetails.signature,
+                    side: swapDetails?.perspective?.side,
+                    tokenIn: swapDetails?.perspective?.tokenIn,
+                    tokenOut: swapDetails?.perspective?.tokenOut,
+                    amountIn: swapDetails?.perspective?.amountIn,
+                    amountOut: swapDetails?.perspective?.amountOut
+                })
             );
 
             const users = await this.getUsersTrackingWallet(alphaWallet);
@@ -45,7 +50,7 @@ class TradingEngine {
                 );
             }
         } catch (error) {
-            console.error('Error processing swap signal:', error);
+            this.logWithTimestamp('❌ Error processing swap signal:', error);
         }
     }
 
@@ -59,75 +64,95 @@ class TradingEngine {
             `;
             return database.db.prepare(query).all(alphaWallet);
         } catch (err) {
-            console.error('DB error fetching users tracking wallet:', err);
+            this.logWithTimestamp('❌ DB error fetching users tracking wallet:', err);
             return [];
         }
     }
 
+    // === MAIN COPY-TRADE EXECUTION ===
     async executeCopyTrade(user, swapDetails, alphaWallet) {
         try {
-            console.log('Executing copy trade for user:', user.telegram_id); 
-            const { side, tokenIn, tokenOut, amountIn, amountOut } = swapDetails;
-        
-            // Handle auto-sell logic for sell orders
+            const p = swapDetails.perspective || {};
+            const side = p.side;
+            const tokenIn = p.tokenIn;
+            const tokenOut = p.tokenOut;
+            const amountIn = p.amountIn;
+            const amountOut = p.amountOut;
+
+            this.logWithTimestamp('Executing copy trade for user', user.telegram_id, {
+                side, tokenIn, tokenOut, amountIn, amountOut
+            });
+
+            // Auto-sell follow filter
             if (side === 'sell' && user.auto_sell_enabled) {
                 const shouldFollowSell = await this.checkAlphaWalletSell(user, tokenIn, alphaWallet);
                 if (!shouldFollowSell) {
-                    console.log('User has no position to sell or not following alpha sell, skipping');           
-                    return;     
-                }
-            }
-
-            // Validate trade before execution
-            if (!await this.validateTrade(user, swapDetails)) return;
-
-            // Check existing position for this token
-            let existingPosition = await this.getUserTokenPosition(user.id, tokenOut);
-            // Calculate base trade amount
-            let userTradeAmount = await this.calculateTradeAmount(user, swapDetails, alphaWallet);
-
-            if (side === 'buy' && existingPosition && existingPosition.isOpen) {
-                // Scaling logic: add a fraction of alpha trade to existing position
-                const scaleFactor = 0.5; // Scale by 50%, configurable
-                userTradeAmount = userTradeAmount * scaleFactor;
-
-                if (userTradeAmount <= 0) {
-                    console.log(`Existing position in ${tokenOut}, no scaling needed.`);
+                    this.logWithTimestamp('Skip: user has no position to sell or not following alpha sell');
                     return;
                 }
-                console.log(`Scaling existing position in ${tokenOut} by ${userTradeAmount}`);
             }
 
-            if (userTradeAmount <= 0 || userTradeAmount > user.max_trade_amount) {
-                console.log('Trade amount outside limits, skipping');
+            // Validate trade (no aggregator checks)
+            if (!await this.validateTrade(user, { side, tokenIn, tokenOut, amountIn, amountOut }, alphaWallet)) {
                 return;
             }
 
-            // Get token information
+            // Existing position + amount sizing
+            let existingPosition = await this.getUserTokenPosition(user.id, tokenOut);
+            let userTradeAmount = await this.calculateTradeAmount(user, { side, tokenIn, tokenOut, amountIn, amountOut }, alphaWallet);
+
+            if (side === 'buy' && existingPosition && existingPosition.isOpen) {
+                // scale buys if already in position
+                const scaleFactor = 0.5;
+                userTradeAmount = userTradeAmount * scaleFactor;
+                if (userTradeAmount <= 0) {
+                    this.logWithTimestamp(`Existing position in ${tokenOut}, no scaling needed.`);
+                    return;
+                }
+                this.logWithTimestamp(`Scaling existing position in ${tokenOut} by ${userTradeAmount}`);
+            }
+
+            if (userTradeAmount <= 0 || userTradeAmount > (user.max_trade_amount || Number.MAX_VALUE)) {
+                this.logWithTimestamp('Trade amount outside limits, skipping');
+                return;
+            }
+
+            // Token info (on-chain / local, NO Jupiter)
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
-            // Get Jupiter quote
-            const quote = await this.getJupiterQuote(
+            // Simulate route on-chain (no aggregator): let SolanaService figure out best/native route it supports
+            const sim = await this.solanaService.simulateSwap({
                 tokenIn,
                 tokenOut,
-                userTradeAmount,
-                user.slippage || 3
-            );
+                amountIn: userTradeAmount,
+                // user slippage in bps (e.g., 3% -> 300 bps)
+                slippageBps: Math.floor((user.slippage || 3) * 100)
+            });
 
-        
-            if (!quote) {
-                await this.notifyUser(user.telegram_id, '❌ Failed to get quote for trade');
+            if (!sim || !sim.outAmount || sim.outAmount <= 0) {
+                await this.notifyUser(user.telegram_id, '❌ No viable route found for this trade.');
                 return;
             }
-            
-            // Execute the actual trade
-            const tradeResult = await this.executeJupiterSwap(
-                user.private_key,
-                quote
-            );
 
-            // Record the trade
-        
+            // Build & send swap directly (no Jupiter)
+            const exec = await this.solanaService.executeSwap({
+                userPrivateKeyEncrypted: user.private_key,
+                tokenIn,
+                tokenOut,
+                amountIn: userTradeAmount,
+                minOut: sim.minOut,       // derived from slippage
+                routeInfo: sim.routeInfo, // DEX/AMM-specific data from simulation
+            });
+
+            const tradeResult = {
+                success: !!exec?.signature,
+                signature: exec?.signature || null,
+                inputAmount: userTradeAmount,
+                outputAmount: sim.outAmount,
+                priceImpact: sim.priceImpactPct || 0
+            };
+
+            // DB record
             const tradeData = {
                 userId: user.id,
                 alphaWallet,
@@ -136,80 +161,43 @@ class TradingEngine {
                 tokenName: tokenInfo?.name || 'Unknown Token',
                 side,
                 amount: userTradeAmount,
-                price: parseFloat(quote.outAmount) / parseFloat(quote.inAmount),
+                price: sim.price || 0, // if your sim gives a per-unit price; else compute output/input
                 signature: tradeResult.signature,
-                jupiterQuote: JSON.stringify(quote),
+                routeInfo: JSON.stringify(sim.routeInfo || {}),
                 status: tradeResult.success ? 'completed' : 'failed'
             };
 
             await database.addTrade(tradeData);
 
-            // Update positions tracking
+            // Update positions + notify
             if (tradeResult.success) {
                 await this.updateUserPosition(user.id, tradeData);
                 await this.notifyTradeSuccess(user.telegram_id, tradeData, tradeResult, tokenInfo);
             } else {
-                await this.notifyTradeFailed(user.telegram_id, tradeData, tradeResult.error);
+                await this.notifyTradeFailed(user.telegram_id, tradeData, 'Execution failed');
             }
         } catch (error) {
-            console.error('Error executing copy trade:', error);
+            this.logWithTimestamp('❌ Error executing copy trade:', error);
             await this.notifyUser(user.telegram_id, `❌ Trade execution failed: ${error.message}`);
         }
     }
 
-    async getJupiterQuote(tokenIn, tokenOut, amount, slippage = 3) {
-        let params; 
-        const url = `${this.jupiterConfig.baseURL}/quote`;
-
+    // === TOKEN INFO (NO Jupiter) ===
+    async getTokenInfo(tokenAddress) {
         try {
-            const inputDecimals = await this.getTokenDecimals(tokenIn);
-            const outputDecimals = await this.getTokenDecimals(tokenOut);
-            
-            const amountInSmallestUnit = Math.floor(amount * Math.pow(10, inputDecimals));
-            
-            const params = new URLSearchParams({
-                inputMint: tokenIn,
-                outputMint: tokenOut,
-                amount: amountInSmallestUnit.toString(),
-                slippageBps: Math.floor(slippage * 100).toString(),
-                onlyDirectRoutes: 'false',
-                asLegacyTransaction: 'false'
-            });
-                        
-            const response = await axios.get(url, {
-                params,
-                timeout: this.jupiterConfig.timeout
-            });
-            
-            if (!response.data?.routePlan || response.data.routePlan.length === 0) {
-                console.warn(`⚠️ Jupiter responded but no routePlan found for ${tokenIn} -> ${tokenOut}`, {
-                    responseData: response.data,
-                    requestUrl: url,
-                    requestParams: params.toString()
-                });
-                return null;
-            }
-            
-            // Normalize output using actual decimals
-            response.data.outAmount = parseFloat(response.data.outAmount) / Math.pow(10, outputDecimals);
-            console.log(`Jupiter quote obtained: ${amount} ${tokenIn} -> ${response.data.outAmount} ${tokenOut}`);
-            return response.data;
+            // Normalize SOL to WSOL for metadata purposes if your SolanaService expects WSOL mint
+            const wsol = "So11111111111111111111111111111111111111112";
+            const mint = tokenAddress === "SOL" ? wsol : tokenAddress;
+
+            if (!this.tokenInfoCache) this.tokenInfoCache = new Map();
+            if (this.tokenInfoCache.has(mint)) return this.tokenInfoCache.get(mint);
+
+            // Delegate to SolanaService: on-chain metadata / local token list
+            const meta = await this.solanaService.getTokenMetadata(mint);
+            if (meta) this.tokenInfoCache.set(mint, meta);
+            return meta;
         } catch (error) {
-            const status = error?.response?.status;
-            const statusText = error?.response?.statusText;
-            const data = error?.response?.data;
-            
-            console.error('Error getting Jupiter quote', {
-                message: error.message,
-                status,
-                statusText,
-                data,
-                tokenIn,
-                tokenOut,
-                amount,
-                params: params?.toString(),
-                url
-            });
+            this.logWithTimestamp('❌ Error getting token info:', error);
             return null;
         }
     }
@@ -218,108 +206,33 @@ class TradingEngine {
         try {
             const info = await this.getTokenInfo(tokenAddress);
             if (info?.decimals !== undefined) return info.decimals;
-            
+
+            // fallback direct on-chain
             try {
-                const pubkey = new PublicKey(tokenAddress);
+                const pubkey = new PublicKey(tokenAddress === 'SOL'
+                    ? 'So11111111111111111111111111111111111111112'
+                    : tokenAddress);
                 const accountInfo = await this.solanaService.connection.getParsedAccountInfo(pubkey);
                 const decimals = accountInfo.value?.data?.parsed?.info?.decimals;
                 if (decimals !== undefined) return decimals;
             } catch (innerErr) {
-                console.warn(`Not a valid public key, skipping on-chain check: ${tokenAddress}`);
+                this.logWithTimestamp(`Not a valid public key, skipping on-chain check: ${tokenAddress}`);
             }
         } catch (err) {
-            console.warn(`Could not fetch decimals for token ${tokenAddress}: ${err.message}`);
+            this.logWithTimestamp(`Could not fetch decimals for token ${tokenAddress}: ${err.message}`);
         }
-        console.warn(`Using default decimals=9 for ${tokenAddress}`);
+        this.logWithTimestamp(`Using default decimals=9 for ${tokenAddress}`);
         return 9;
     }
 
-    async executeJupiterSwap(privateKey, quote) {
-        try {
-            const decryptedPrivateKey = this.telegramBot.decryptPrivateKey(privateKey);
-            if (!decryptedPrivateKey) throw new Error('Failed to decrypt private key');
-
-            const swapResponse = await axios.post(this.jupiterConfig.swapURL, {
-                quoteResponse: quote,
-                userPublicKey: quote.accounts?.tokenAccountIn || quote.inputMint,
-                wrapAndUnwrapSol: true,
-                useSharedAccounts: true,
-                feeAccount: undefined,
-                computeUnitPriceMicroLamports: 'auto'
-            }, { timeout: this.jupiterConfig.timeout });
-
-            if (!swapResponse.data?.swapTransaction) {
-                throw new Error('Failed to get swap transaction from Jupiter');
-            }
-
-            const signature = await this.solanaService.executeTransaction(
-                decryptedPrivateKey,
-                swapResponse.data.swapTransaction
-            );
-
-            return {
-                success: true,
-                signature,
-                inputAmount: quote.inAmount,
-                outputAmount: quote.outAmount,
-                priceImpact: quote.priceImpactPct
-            };
-
-        } catch (error) {
-            console.error('Error executing Jupiter swap:', error.message);
-            return { success: false, error: error.message, signature: null };
-        }
-    }
-
-    async getTokenInfo(tokenAddress) {
-        try {
-            // ✅ Normalize "SOL" into wrapped SOL mint
-            if (tokenAddress === "SOL") {
-                tokenAddress = "So11111111111111111111111111111111111111112";
-            }
-            
-            if (!this.tokenInfoCache) this.tokenInfoCache = new Map();
-            if (this.tokenInfoCache.has(tokenAddress)) {
-                console.log(`Token info cache hit for ${tokenAddress}`, this.tokenInfoCache.get(tokenAddress));
-                return this.tokenInfoCache.get(tokenAddress);
-            }
-            console.log(`Fetching token info from Jupiter for: ${tokenAddress}`);
-            const response = await axios.get(`https://token.jup.ag/strict`, { timeout: 5000 });
-            
-            console.log(`Jupiter token list fetched, total tokens: ${response.data.length}`);
-            const tokenInfo = response.data.find(t => t.address === tokenAddress);
-            
-            let result;
-            if (tokenInfo) {
-                result = { 
-                    symbol: tokenInfo.symbol, 
-                    name: tokenInfo.name, 
-                    decimals: tokenInfo.decimals, 
-                    logoURI: tokenInfo.logoURI 
-                };
-                console.log(`Token info found on Jupiter:`, result);
-            } else {
-                console.log(`Token ${tokenAddress} not found on Jupiter, fetching on-chain metadata`);
-                result = await this.solanaService.getTokenMetadata(tokenAddress);
-                console.log(`On-chain token metadata:`, result);
-            }
-            if (result) this.tokenInfoCache.set(tokenAddress, result);
-            return result;
-        } catch (error) {
-            console.error('Error getting token info:', error);
-            return null;
-        }
-    }
-
+    // === POSITIONS ===
     async updateUserPosition(userId, tradeData) {
         try {
             const { tokenAddress, tokenSymbol, side, amount, price } = tradeData;
             let position = await this.getUserTokenPosition(userId, tokenAddress);
-            
             let updatedPosition;
-            
+
             if (!position) {
-                // New buy position
                 if (side === 'buy') {
                     updatedPosition = {
                         userId,
@@ -335,20 +248,20 @@ class TradingEngine {
             } else {
                 if (side === 'buy') {
                     const newTotalAmount = position.totalAmount + amount;
-                    const newAveragePrice = (position.totalAmount * position.averagePrice + amount * price) / newTotalAmount;
-                    
+                    const newAveragePrice =
+                        (position.totalAmount * position.averagePrice + amount * price) / newTotalAmount;
+
                     updatedPosition = {
                         ...position,
                         totalAmount: newTotalAmount,
                         averagePrice: newAveragePrice,
                         updatedAt: new Date().toISOString()
                     };
-                    
                     await database.updatePosition(userId, tokenAddress, updatedPosition);
                 } else if (side === 'sell') {
                     const remainingAmount = Math.max(0, position.totalAmount - amount);
                     const isOpen = remainingAmount > 0;
-                    
+
                     updatedPosition = {
                         ...position,
                         totalAmount: remainingAmount,
@@ -359,195 +272,235 @@ class TradingEngine {
                     await database.updatePosition(userId, tokenAddress, updatedPosition);
                 }
             }
-            // Update cache
+
             if (updatedPosition) {
                 const cacheKey = `${userId}_${tokenAddress}`;
                 this.positions.set(cacheKey, updatedPosition);
             }
         } catch (error) {
-            console.error('Error updating user position:', error);
+            this.logWithTimestamp('❌ Error updating user position:', error);
         }
     }
 
     async getUserTokenPosition(userId, tokenAddress) {
         try {
             const cacheKey = `${userId}_${tokenAddress}`;
-            // Return cached position if exists
-            if (this.positions.has(cacheKey)) {
-                return this.positions.get(cacheKey);
-            }
-            // Fetch from DB
+            if (this.positions.has(cacheKey)) return this.positions.get(cacheKey);
+
             const position = await database.getUserPosition(userId, tokenAddress);
-            // Cache the result
-            if (position) {
-                this.positions.set(cacheKey, position);
-            }
-            
+            if (position) this.positions.set(cacheKey, position);
             return position || null;
         } catch (error) {
-            console.error('Error getting user token position:', error);
+            this.logWithTimestamp('❌ Error getting user token position:', error);
             return null;
         }
     }
-                    
-    
-    // Check if user should follow an alpha wallet's sell
+
+    // === FOLLOW SELL FILTER ===
     async checkAlphaWalletSell(user, tokenAddress, alphaWallet) {
         try {
-            // Get the user's open position for this token
             const position = await this.getUserTokenPosition(user.id, tokenAddress);
-            
-            if (!position || !position.isOpen || position.totalAmount <= 0) {
-                return false; // No position to sell
-            }
-            
-            // Ensure the user actually bought this token due to this alpha wallet
+            if (!position || !position.isOpen || position.totalAmount <= 0) return false;
+
             const buyTrades = await database.getUserBuyTrades(user.id, tokenAddress, alphaWallet);
-            // Only follow sell if user bought from this alpha wallet
             return buyTrades.length > 0;
         } catch (error) {
-            console.error('Error checking alpha wallet sell:', error);
+            this.logWithTimestamp('❌ Error checking alpha wallet sell:', error);
             return false;
         }
     }
 
-    async calculateTradeAmount(user, swapDetails, alphaWallet) {
+    // === SIZING ===
+    async calculateTradeAmount(user, swap, alphaWallet) {
         try {
-            const { side, amountIn, tokenIn, tokenOut } = swapDetails;
-            
+            const { side, amountIn, tokenIn, tokenOut } = swap;
+
             if (side === 'buy') {
-                // Try to get position from cache first
                 const cacheKey = `${user.id}_${tokenOut}`;
-                let existingPosition = this.positions.get(cacheKey);
-                
-                if (!existingPosition) {
-                    // Fallback to DB if not in cache
-                    existingPosition = await this.getUserTokenPosition(user.id, tokenOut);
-                    if (existingPosition) this.positions.set(cacheKey, existingPosition);
-                }
-                
-                // Check if user already bought this token from the alpha wallet
+                let existingPosition = this.positions.get(cacheKey) ||
+                    await this.getUserTokenPosition(user.id, tokenOut);
+
+                if (existingPosition) this.positions.set(cacheKey, existingPosition);
+
                 const buyTrades = await database.getUserBuyTrades(user.id, tokenOut, alphaWallet);
-                
                 if (existingPosition && existingPosition.isOpen && buyTrades.length > 0) {
-                    console.log(`User already has an open position in ${tokenOut} from this alpha wallet, skipping duplicate buy.`);
+                    this.logWithTimestamp(`Already holding ${tokenOut} from this alpha; skipping duplicate buy.`);
                     return 0;
                 }
-                
-                // Determine amount to buy (10% of alpha trade, capped by user max)
+
                 const maxAmount = user.max_trade_amount || 0.1;
                 const proportionalAmount = amountIn * 0.1; // 10% of alpha trade
                 return Math.min(maxAmount, proportionalAmount, 1.0);
             } else {
-                // SELL: follow user's existing position
                 const cacheKey = `${user.id}_${tokenIn}`;
-                let position = this.positions.get(cacheKey);
-                
-                if (!position) {
-                    position = await this.getUserTokenPosition(user.id, tokenIn);
-                    if (position) this.positions.set(cacheKey, position);
-                }
-                
+                let position = this.positions.get(cacheKey) ||
+                    await this.getUserTokenPosition(user.id, tokenIn);
+
+                if (position) this.positions.set(cacheKey, position);
                 if (!position || !position.isOpen || position.totalAmount <= 0) return 0;
-                
-                // Sell up to 50% of user's position by default
+
                 return Math.min(position.totalAmount, position.totalAmount * 0.5);
             }
         } catch (error) {
-            console.error('Error calculating trade amount:', error);
+            this.logWithTimestamp('❌ Error calculating trade amount:', error);
             return 0;
         }
     }
 
-    // Enhanced auto-sell monitoring
-    startPositionMonitoring() {
-        if (this.positionMonitorInterval) {
-            clearInterval(this.positionMonitorInterval);
+    // === VALIDATION (NO Jupiter calls) ===
+    async validateTrade(user, swap, alphaWallet) {
+        try {
+            const { side, tokenOut, tokenIn } = swap;
+            const userTradeAmount = await this.calculateTradeAmount(user, swap, alphaWallet);
+
+            if (userTradeAmount < 0.001) {
+                this.logWithTimestamp('Trade amount too small, skipping');
+                return false;
+            }
+
+            if (userTradeAmount > (user.max_trade_amount || 0.1)) {
+                this.logWithTimestamp('Trade amount exceeds maximum, skipping');
+                return false;
+            }
+
+            if (side === 'buy') {
+                const balance = await this.solanaService.getWalletBalance(user.wallet_address);
+                if (balance < userTradeAmount + 0.01) {
+                    this.logWithTimestamp('Insufficient balance for trade');
+                    return false;
+                }
+            }
+
+            const tokenAddress = side === 'buy' ? tokenOut : tokenIn;
+            if (await this.isTokenBlacklisted(tokenAddress)) {
+                this.logWithTimestamp('Token is blacklisted, skipping');
+                return false;
+            }
+
+            if (side === 'sell') {
+                const cacheKey = `${user.id}_${tokenIn}`;
+                let position = this.positions.get(cacheKey) ||
+                    await this.getUserTokenPosition(user.id, tokenIn);
+
+                if (position) this.positions.set(cacheKey, position);
+                if (!position || !position.isOpen || position.totalAmount <= 0) {
+                    this.logWithTimestamp('No open position to sell, skipping');
+                    return false;
+                }
+            }
+
+            // Try a lightweight simulation for route availability
+            const sim = await this.solanaService.simulateSwap({
+                tokenIn,
+                tokenOut,
+                amountIn: userTradeAmount,
+                slippageBps: Math.floor((user.slippage || 3) * 100)
+            });
+
+            if (!sim || !sim.outAmount || sim.outAmount <= 0) {
+                this.logWithTimestamp('No viable route in simulation, skipping');
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            this.logWithTimestamp('❌ Error validating trade:', error);
+            return false;
         }
-        
-        // Check positions every 30 seconds
-        this.positionMonitorInterval = setInterval(() => {
-            this.monitorPositions();
-        }, 30000);
-        
-        console.log('Position monitoring started');
+    }
+
+    async isTokenBlacklisted(tokenAddress) {
+        try {
+            const blacklistedTokens = await database.getBlacklistedTokens();
+            return blacklistedTokens.includes(tokenAddress);
+        } catch (error) {
+            this.logWithTimestamp('❌ Error checking token blacklist:', error);
+            return false;
+        }
+    }
+
+    // === AUTO-SELL LOOP ===
+    startPositionMonitoring() {
+        if (this.positionMonitorInterval) clearInterval(this.positionMonitorInterval);
+        this.positionMonitorInterval = setInterval(() => this.monitorPositions(), 30000);
+        this.logWithTimestamp('Position monitoring started');
     }
 
     async monitorPositions() {
         try {
-            console.log('Monitoring positions for auto-sell...');
-
-            // Get all users with auto-sell enabled and open positions
+            this.logWithTimestamp('Monitoring positions for auto-sell...');
             const users = await this.getUsersWithAutoSell();
 
             for (const user of users) {
                 const positions = await this.getUserOpenPositions(user.id);
-
                 for (const position of positions) {
                     await this.checkAutoSellConditions(user, position);
                 }
             }
         } catch (error) {
-            console.error('Error monitoring positions:', error);
+            this.logWithTimestamp('❌ Error monitoring positions:', error);
         }
     }
 
     async checkAutoSellConditions(user, position) {
         try {
-            // Normalize position.isOpen in case this wasn't transformed earlier
             const isOpen = position.isOpen || position.is_open === 1;
             if (!user.auto_sell_enabled || !isOpen || position.totalAmount <= 0) return;
-            
-            // Get current token price
-            const currentPrice = await this.getCurrentTokenPrice(position.tokenAddress);
+
+            // Price source: request from SolanaService (e.g., Pyth/Switchboard or micro-sim via a tiny swap)
+            const currentPrice = await this.solanaService.getIndicativePriceUSD(position.tokenAddress);
             if (!currentPrice || currentPrice <= 0) return;
-            
+
             const entryPrice = position.averagePrice;
             const currentProfitPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
-            
-            console.log(`Position check: ${position.tokenSymbol} - Entry: ${entryPrice}, Current: ${currentPrice}, P&L: ${currentProfitPercent.toFixed(2)}%`);
 
-            // Check for take profit
+            this.logWithTimestamp(`Position check: ${position.tokenSymbol} P&L ${currentProfitPercent.toFixed(2)}%`);
+
             if (currentProfitPercent >= (user.take_profit || 100)) {
                 await this.executeAutoSell(user, position, 'take_profit', currentPrice);
                 return;
             }
-            // Check for stop loss
             if (currentProfitPercent <= -(user.stop_loss || 20)) {
                 await this.executeAutoSell(user, position, 'stop_loss', currentPrice);
                 return;
             }
         } catch (error) {
-            console.error('Error checking auto-sell conditions:', error);
+            this.logWithTimestamp('❌ Error checking auto-sell conditions:', error);
         }
     }
 
     async executeAutoSell(user, position, reason, currentPrice) {
         try {
-            console.log(`Executing auto-sell for ${position.tokenSymbol}: ${reason}`);
+            this.logWithTimestamp(`Executing auto-sell for ${position.tokenSymbol}: ${reason}`);
             const tokenInfo = await this.getTokenInfo(position.tokenAddress);
             if (!tokenInfo) {
-                console.error('Failed to fetch token info for auto-sell');
+                this.logWithTimestamp('Failed to fetch token info for auto-sell');
                 return;
             }
-            
-            // Get Jupiter quote (no need to manually pass decimals)
-            const quote = await this.getJupiterQuote(
-                position.tokenAddress,
-                'So11111111111111111111111111111111111111112', // WSOL
-                position.totalAmount,
-                user.slippage || 3
-            );
-            
-            if (!quote) {
-                console.error('Failed to get quote for auto-sell');
+
+            // Simulate selling position.tokenAddress -> WSOL (or USDC) then execute
+            const wsol = 'So11111111111111111111111111111111111111112';
+            const sim = await this.solanaService.simulateSwap({
+                tokenIn: position.tokenAddress,
+                tokenOut: wsol,
+                amountIn: position.totalAmount,
+                slippageBps: Math.floor((user.slippage || 3) * 100)
+            });
+            if (!sim || !sim.outAmount || sim.outAmount <= 0) {
+                this.logWithTimestamp('Failed to simulate auto-sell route');
                 return;
             }
-            
-            // Execute swap
-            const sellResult = await this.executeJupiterSwap(user.private_key, quote);
-            
-            if (sellResult.success) {
+
+            const exec = await this.solanaService.executeSwap({
+                userPrivateKeyEncrypted: user.private_key,
+                tokenIn: position.tokenAddress,
+                tokenOut: wsol,
+                amountIn: position.totalAmount,
+                minOut: sim.minOut,
+                routeInfo: sim.routeInfo
+            });
+
+            if (exec?.signature) {
                 const tradeData = {
                     userId: user.id,
                     alphaWallet: 'AUTO_SELL',
@@ -557,15 +510,15 @@ class TradingEngine {
                     side: 'sell',
                     amount: position.totalAmount,
                     price: currentPrice,
-                    signature: sellResult.signature,
-                    jupiterQuote: JSON.stringify(quote),
+                    signature: exec.signature,
+                    routeInfo: JSON.stringify(sim.routeInfo || {}),
                     status: 'completed',
                     autoSellReason: reason
                 };
-                
+
                 await database.addTrade(tradeData);
                 await this.updateUserPosition(user.id, tradeData);
-                
+
                 const profitLoss = ((currentPrice - position.averagePrice) / position.averagePrice) * 100;
                 const message = `
 🔔 <b>Auto-Sell Executed!</b>
@@ -575,19 +528,19 @@ class TradingEngine {
 💵 <b>Entry Price:</b> $${position.averagePrice.toFixed(8)}
 💵 <b>Sell Price:</b> $${currentPrice.toFixed(8)}
 📈 <b>P&L:</b> ${profitLoss >= 0 ? '🟢' : '🔴'} ${profitLoss.toFixed(2)}%
-🔗 <b>Signature:</b> <code>${sellResult.signature}</code>
+🔗 <b>Signature:</b> <code>${exec.signature}</code>
 ⏰ <i>${new Date().toLocaleString()}</i>
-            `;
+                `;
                 await this.notifyUser(user.telegram_id, message);
             } else {
-                console.error('Auto-sell execution failed:', sellResult.error);
+                this.logWithTimestamp('Auto-sell execution failed');
                 await this.notifyUser(
                     user.telegram_id,
-                    `⚠️ Auto-sell failed for ${position.tokenSymbol}: ${sellResult.error}`
+                    `⚠️ Auto-sell failed for ${position.tokenSymbol}`
                 );
             }
         } catch (error) {
-            console.error('Error executing auto-sell:', error);
+            this.logWithTimestamp('❌ Error executing auto-sell:', error);
             await this.notifyUser(
                 user.telegram_id,
                 `❌ Auto-sell error for ${position.tokenSymbol}: ${error.message}`
@@ -595,47 +548,20 @@ class TradingEngine {
         }
     }
 
-    async getCurrentTokenPrice(tokenAddress) {
-        try {
-            // Use Jupiter price API
-            const response = await axios.get(`https://price.jup.ag/v4/price?ids=${tokenAddress}`, {
-                timeout: 5000
-            });
-
-            if (response.data?.data?.[tokenAddress]?.price) {
-                return parseFloat(response.data.data[tokenAddress].price);
-            }
-
-            // Fallback to getting price through a quote
-            const quote = await this.getJupiterQuote(
-                tokenAddress,
-                'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-                1, // 1 token
-                1 // 1% slippage
-            );
-
-            if (quote && quote.outAmount) {
-                return parseFloat(quote.outAmount) / Math.pow(10, 6); // USDC has 6 decimals
-            }
-
-            return 0;
-        } catch (error) {
-            console.error('Error getting token price:', error);
-            return 0;
-        }
-    }
-
     async getUserOpenPositions(userId) {
         try {
             return await database.getUserOpenPositions(userId);
         } catch (error) {
-            console.error('Error getting user open positions:', error);
+            this.logWithTimestamp('❌ Error getting user open positions:', error);
             return [];
         }
     }
 
+    // === NOTIFICATIONS ===
     async notifyTradeSuccess(telegramId, tradeData, tradeResult, tokenInfo) {
-        const priceImpact = tradeResult.priceImpact ? `📊 <b>Price Impact:</b> ${(tradeResult.priceImpact * 100).toFixed(2)}%\n` : '';
+        const priceImpact = tradeResult.priceImpact
+            ? `📊 <b>Price Impact:</b> ${(tradeResult.priceImpact * 100).toFixed(2)}%\n`
+            : '';
         const tokenLogo = tokenInfo?.logoURI ? `🏷️` : '💰';
 
         const message = `
@@ -644,24 +570,20 @@ class TradingEngine {
 💼 <b>Alpha Wallet:</b> <code>${tradeData.alphaWallet.slice(0, 8)}...${tradeData.alphaWallet.slice(-8)}</code>
 ${tokenLogo} <b>Token:</b> ${tokenInfo?.name || tradeData.tokenSymbol} (${tradeData.tokenSymbol})
 📊 <b>Action:</b> ${tradeData.side.toUpperCase()}
-💰 <b>Amount:</b> ${tradeData.amount.toFixed(6)} ${tradeData.side === 'buy' ? 'SOL' : tradeData.tokenSymbol}
-💲 <b>Price:</b> $${tradeData.price.toFixed(8)}
+💰 <b>Amount:</b> ${tradeData.amount.toFixed(6)}
+💲 <b>Ref. Price:</b> $${(tradeData.price || 0).toFixed(8)}
 ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
 
 ⏰ <i>${new Date().toLocaleString()}</i>
         `;
 
-        await this.bot.api.sendMessage(telegramId, message, { 
+        await this.bot.api.sendMessage(telegramId, message, {
             parse_mode: 'HTML',
             reply_markup: {
                 inline_keyboard: [[
                     {
                         text: '🔍 View on Explorer',
                         url: `https://solscan.io/tx/${tradeResult.signature}`
-                    },
-                    {
-                        text: '📊 Jupiter',
-                        url: `https://jup.ag/swap/${tradeData.tokenAddress}`
                     }
                 ]]
             }
@@ -675,12 +597,11 @@ ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
 💼 <b>Alpha Wallet:</b> <code>${tradeData.alphaWallet.slice(0, 8)}...${tradeData.alphaWallet.slice(-8)}</code>
 🏷️ <b>Token:</b> ${tradeData.tokenName || tradeData.tokenSymbol} (${tradeData.tokenSymbol})
 📊 <b>Attempted Action:</b> ${tradeData.side.toUpperCase()}
-💰 <b>Amount:</b> ${tradeData.amount.toFixed(6)} ${tradeData.side === 'buy' ? 'SOL' : tradeData.tokenSymbol}
+💰 <b>Amount:</b> ${tradeData.amount.toFixed(6)}
 ❌ <b>Error:</b> ${error}
 
 ⏰ <i>${new Date().toLocaleString()}</i>
         `;
-
         await this.bot.api.sendMessage(telegramId, message, { parse_mode: 'HTML' });
     }
 
@@ -688,116 +609,40 @@ ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
         try {
             await this.bot.api.sendMessage(telegramId, message, { parse_mode: 'HTML' });
         } catch (error) {
-            console.error('Error sending notification:', error);
+            this.logWithTimestamp('❌ Error sending notification:', error);
         }
     }
 
-    async validateTrade(user, swapDetails) {
-        try {
-            const { side, amountIn, tokenOut, tokenIn } = swapDetails;
-            const userTradeAmount = await this.calculateTradeAmount(user, swapDetails);
-            
-            // Minimum trade check
-            if (userTradeAmount < 0.001) {
-                console.log('Trade amount too small, skipping');
-                return false;
-            }
-            
-            // Maximum trade check
-            if (userTradeAmount > (user.max_trade_amount || 0.1)) {
-                console.log('Trade amount exceeds maximum, skipping');
-                return false;
-            }
-            
-            // Buy order: check wallet balance
-            if (side === 'buy') {
-                const balance = await this.solanaService.getWalletBalance(user.wallet_address);
-                if (balance < userTradeAmount + 0.01) {
-                    console.log('Insufficient balance for trade');
-                    return false;
-                }
-            }
-            
-            // Check blacklist
-            const tokenAddress = side === 'buy' ? tokenOut : tokenIn;
-            
-            if (await this.isTokenBlacklisted(tokenAddress)) {
-                console.log('Token is blacklisted, skipping');
-                return false;
-            }
-            
-            // SELL: check user position via cache first
-            if (side === 'sell') {
-                const cacheKey = `${user.id}_${tokenIn}`;
-                let position = this.positions.get(cacheKey);
-                
-                if (!position) {
-                    position = await this.getUserTokenPosition(user.id, tokenIn);
-                    if (position) this.positions.set(cacheKey, position);
-                }
-                
-                if (!position || !position.isOpen || position.totalAmount <= 0) {
-                    console.log('No open position to sell, skipping');
-                    return false;
-                }
-            }
-            
-            // Check Jupiter quote availability
-            const quote = await this.getJupiterQuote(tokenIn, tokenOut, userTradeAmount, 1);
-            if (!quote) {
-                console.log('No Jupiter route available for this trade');
-                return false;
-            }
-            return true;
-        } catch (error) {
-            console.error('Error validating trade:', error);
-            return false;
-        }
-    }
-
-    async isTokenBlacklisted(tokenAddress) {
-        try {
-            // Check against known scam tokens and rug pulls
-            const blacklistedTokens = await database.getBlacklistedTokens();
-            return blacklistedTokens.includes(tokenAddress);
-        } catch (error) {
-            console.error('Error checking token blacklist:', error);
-            return false;
-        }
-    }
-
+    // === USERS & STATS ===
     async getUsersWithAutoSell() {
         try {
             if (!this.autoSellUsersCache || (Date.now() - this.autoSellUsersCacheTime) > 30000) {
-                const users = database.db.prepare(
-                    'SELECT * FROM users WHERE auto_sell_enabled = 1 AND wallet_address IS NOT NULL'
-                ).all();
-                
+                const users = database.db
+                    .prepare('SELECT * FROM users WHERE auto_sell_enabled = 1 AND wallet_address IS NOT NULL')
+                    .all();
                 this.autoSellUsersCache = users;
                 this.autoSellUsersCacheTime = Date.now();
             }
-            
             return this.autoSellUsersCache || [];
         } catch (err) {
-            console.error('DB error fetching users with auto-sell:', err);
+            this.logWithTimestamp('❌ DB error fetching users with auto-sell:', err);
             return [];
         }
     }
 
     async startMonitoring() {
-        console.log('Trading engine started monitoring...');
+        this.logWithTimestamp('Trading engine started monitoring...');
         this.startPositionMonitoring();
     }
 
     async stopMonitoring() {
-        console.log('Trading engine stopped monitoring...');
+        this.logWithTimestamp('Trading engine stopped monitoring...');
         if (this.positionMonitorInterval) {
             clearInterval(this.positionMonitorInterval);
             this.positionMonitorInterval = null;
         }
     }
 
-    // Enhanced statistics
     async calculateUserStats(userId) {
         try {
             const query = `
@@ -826,7 +671,7 @@ ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
                 totalVolumeSold: row.total_volume_sold || 0
             };
         } catch (err) {
-            console.error('DB error calculating user stats:', err);
+            this.logWithTimestamp('❌ DB error calculating user stats:', err);
             return {};
         }
     }
@@ -848,30 +693,27 @@ ${priceImpact}🔗 <b>Signature:</b> <code>${tradeResult.signature}</code>
                 );
             }
 
-            console.log(`Emergency stop activated for user ${userId}: ${reason}`);
+            this.logWithTimestamp(`Emergency stop activated for user ${userId}: ${reason}`);
         } catch (error) {
-            console.error('Error during emergency stop:', error);
+            this.logWithTimestamp('❌ Error during emergency stop:', error);
         }
     }
 
     async cleanupOldTrades() {
         try {
             const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000).toISOString();
-            const result = database.db.prepare(
-                'DELETE FROM trades WHERE created_at < ? AND status != "pending"'
-            ).run(thirtyDaysAgo);
-            console.log(`Cleaned up ${result.changes} old trades`);
+            const result = database.db
+                .prepare('DELETE FROM trades WHERE created_at < ? AND status != "pending"')
+                .run(thirtyDaysAgo);
+            this.logWithTimestamp(`Cleaned up ${result.changes} old trades`);
         } catch (err) {
-            console.error('Error cleaning up old trades:', err);
+            this.logWithTimestamp('❌ Error cleaning up old trades:', err);
         }
     }
 
-    // Cleanup method
     destroy() {
         this.stopMonitoring();
-        if (this.tradeLimiter) {
-            this.tradeLimiter.stop();
-        }
+        if (this.tradeLimiter) this.tradeLimiter.stop();
         this.positions.clear();
         this.activeUsers.clear();
     }
