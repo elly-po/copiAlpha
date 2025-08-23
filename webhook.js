@@ -1,4 +1,3 @@
-// webhook.js
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -31,57 +30,49 @@ class WebhookServer {
     logWithTimestamp(...args) {
         console.log(new Date().toISOString(), ...args);
     }
-    
+
     logHeliusData(payload) {
         const entry = { timestamp: new Date().toISOString(), data: payload };
         try {
-            // Save raw JSON to file
             fs.appendFileSync(this.heliusLogPath, JSON.stringify(entry) + '\n');
 
-            // Ensure we always work with an array
             const transactions = Array.isArray(payload) ? payload : [payload];
-            
             transactions.forEach(tx => {
                 let summary = [];
                 summary.push(`Signature: ${tx.signature || 'N/A'}`);
                 summary.push(`FeePayer: ${tx.feePayer || 'N/A'}`);
                 summary.push(`Slot: ${tx.slot || 'N/A'}`);
                 summary.push(`BlockTime: ${tx.blockTime || 'N/A'}`);
-                
-                // Accounts + balance changes
+
                 if (Array.isArray(tx.accountData)) {
                     tx.accountData.forEach(a => {
                         summary.push(`Account: ${a.account}, NativeChange: ${a.nativeBalanceChange || 0}`);
-                        if (Array.isArray(a.tokenBalanceChanges) && a.tokenBalanceChanges.length) {
+                        if (Array.isArray(a.tokenBalanceChanges)) {
                             a.tokenBalanceChanges.forEach(t => {
                                 summary.push(`Token: ${t.mint}, Amount: ${t.rawTokenAmount.tokenAmount}, From: ${t.userAccount}, To: ${t.tokenAccount}`);
                             });
                         }
                     });
                 }
-                
-                // Native transfers
-                if (Array.isArray(tx.nativeTransfers) && tx.nativeTransfers.length) {
+
+                if (Array.isArray(tx.nativeTransfers)) {
                     tx.nativeTransfers.forEach(n => {
                         summary.push(`NativeTransfer: ${n.amount} lamports From ${n.fromUserAccount} → ${n.toUserAccount}`);
                     });
                 }
-                
-                // Token transfers
-                if (Array.isArray(tx.tokenTransfers) && tx.tokenTransfers.length) {
+
+                if (Array.isArray(tx.tokenTransfers)) {
                     tx.tokenTransfers.forEach(t => {
                         summary.push(`TokenTransfer: ${t.tokenAmount} Mint ${t.mint} From ${t.fromUserAccount} → ${t.toUserAccount}`);
                     });
                 }
-                
-                // Instructions
+
                 if (Array.isArray(tx.instructions)) {
                     summary.push(`Programs: ${tx.instructions.map(ix => ix.programId).join(', ') || 'N/A'}`);
                 }
+
                 console.log(`💾📙📒 Helius TX | ${summary.join(' | ')}`);
             });
-            
-            // this.logWithTimestamp(`📁 Helius payload logged to file: ${this.heliusLogPath}`);
         } catch (err) {
             this.logWithTimestamp('❌ Error writing to helius_data.log:', err);
         }
@@ -93,15 +84,13 @@ class WebhookServer {
     }
 
     setupRoutes() {
-        // Health check
         this.app.get('/health', (req, res) => {
             this.logWithTimestamp('Health check requested');
             res.json({ status: 'OK', timestamp: new Date().toISOString() });
         });
 
-        // Telegram webhook
         this.app.post('/telegram-webhook', async (req, res) => {
-            res.sendStatus(200); // send immediately
+            res.sendStatus(200);
             try {
                 await this.bot.handleUpdate(req.body);
             } catch (err) {
@@ -109,12 +98,10 @@ class WebhookServer {
             }
         });
 
-        // Main Helius webhook
         this.app.post('/webhook', async (req, res) => {
             this.logWithTimestamp('Webhook POST /webhook received');
             this.logHeliusData(req.body);
-
-            res.status(200).json({ received: true }); // respond immediately
+            res.status(200).json({ received: true });
 
             try {
                 await this.webhookLimiter.schedule(() => this.processWebhook(req.body));
@@ -123,12 +110,11 @@ class WebhookServer {
             }
         });
 
-        // Test webhook
         this.app.post('/test-webhook', async (req, res) => {
             this.logWithTimestamp('Test webhook received');
             this.logHeliusData(req.body);
+            res.status(200).json({ received: true });
 
-            res.status(200).json({ received: true }); // respond immediately
             try {
                 await this.processWebhook(req.body);
             } catch (error) {
@@ -138,12 +124,9 @@ class WebhookServer {
     }
 
     async processWebhook(webhookData) {
-        //this.logWithTimestamp('Processing webhook data...');
-
         const transactions = Array.isArray(webhookData) ? webhookData : [webhookData];
         this.logWithTimestamp(` ⤵️ Received ${transactions.length} transaction(s) to process`);
 
-        // Fetch all active alpha wallets once
         let activeAlphaWallets = [];
         try {
             activeAlphaWallets = database.getAllActiveAlphaWallets();
@@ -153,7 +136,7 @@ class WebhookServer {
             return;
         }
 
-        for (const transaction of transactions){
+        for (const transaction of transactions) {
             await this.processTransaction(transaction, activeAlphaWallets);
         }
 
@@ -164,31 +147,30 @@ class WebhookServer {
         this.logWithTimestamp('Processing transaction:', transaction.signature || 'N/A');
 
         if (!this.heliusService.isSwapTransaction(transaction)) {
-            this.logWithTimestamp(`🚩🚩 Transaction ${transaction.signature || 'N/A'} is NOT a swap transaction, skipping`);
+            this.logWithTimestamp(`🚩 Transaction ${transaction.signature || 'N/A'} is NOT a swap transaction, skipping`);
             return;
         }
 
         const involvedAccounts = this.extractAccountAddresses(transaction);
         for (const account of involvedAccounts) {
-            if (activeAlphaWallets.includes(account)) {
-                this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
+            if (!activeAlphaWallets.includes(account)) continue;
 
-                const swapDetails = this.heliusService.extractSwapDetails(transaction, account);
-                if (!swapDetails) {
-                    this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Failed to extract swap details, skipping`);
-                    continue;
-                }
-                
-                const { tokenIn, tokenOut, amountIn, amountOut } = swapDetails;
-                if (!tokenIn || !tokenOut || !amountIn || !amountOut || amountIn <= 0 || amountOut <= 0) {
-                    this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Invalid swap details (tokenIn/tokenOut/amountIn/amountOut missing or zero), skipping`);
-                    continue;
-                }
+            this.logWithTimestamp(`Alpha wallet activity detected: ${account}`);
 
-
-                this.logWithTimestamp(`Swap detected for transaction ${transaction.signature || 'N/A'}:`, swapDetails);
-                await this.tradingEngine.processSwapSignal(swapDetails, account);
+            const swapDetails = this.heliusService.extractSwapDetails(transaction, account);
+            if (!swapDetails) {
+                this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Failed to extract swap details, skipping`);
+                continue;
             }
+
+            const { tokenIn, tokenOut, amountIn, amountOut } = swapDetails.perspective;
+            if (!tokenIn || !tokenOut || !amountIn || !amountOut || amountIn <= 0 || amountOut <= 0) {
+                this.logWithTimestamp(`Transaction ${transaction.signature || 'N/A'} - Invalid swap details, skipping`);
+                continue;
+            }
+
+            this.logWithTimestamp(`Swap detected for transaction ${transaction.signature || 'N/A'}:`, swapDetails);
+            await this.tradingEngine.processSwapSignal(swapDetails, account);
         }
     }
 
