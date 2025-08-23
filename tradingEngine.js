@@ -369,12 +369,12 @@ class TradingEngine {
     }
 
     // === AXIOM HELPERS WITH RETRY LOGIC ===
-    async executeAxiomSwapWithRetry(userPrivateKeyEncrypted, swapParams, maxRetries = 3) {
+    async executeAxiomSwapWithRetry(userPrivateKey, swapParams, maxRetries = 3) {
         let lastError;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const decryptedKey = this.decryptPrivateKey(user.private_key);
+                const decryptedKey = this.decryptPrivateKey(userPrivateKey);
                 const exec = await this.solanaService.executeAxiom({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
