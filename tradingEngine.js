@@ -265,17 +265,17 @@ class TradingEngine {
             this.logWithTimestamp("Decrypted key type:", typeof decryptedKey, "length:", decryptedKey?.length,"key:", decryptedKey);
             this.logWithTimestamp("Axiom params types:", {
                 decryptedKey: typeof decryptedKey,
-                tokenIn: typeof swapParams.tokenIn,
-                tokenOut: typeof swapParams.tokenOut,
-                amountIn: typeof swapParams.amountIn,
-                slippageBps: typeof swapParams.slippageBps
+                tokenIn: typeof tokenIn,
+                tokenOut: typeof tokenOut,
+                amountIn: typeof userTradeAmount,
+                slippageBps: typeof Math.floor((user.slippage || 3) * 100)
             });
             this.logWithTimestamp("Axiom params values:", {
                 decryptedKey: decryptedKey?.slice(0, 8) + "...",
-                tokenIn: swapParams.tokenIn,
-                tokenOut: swapParams.tokenOut,
-                amountIn: swapParams.amountIn,
-                slippageBps: swapParams.slippageBps
+                tokenIn,
+                tokenOut,
+                amountIn: userTradeAmount,
+                slippageBps: Math.floor((user.slippage || 3) * 100)
             });
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
