@@ -10,6 +10,7 @@ if (!fs.existsSync(dataDir)) {
 
 const TelegramBot = require('./telegramBot');
 const WebhookServer = require('./webhook');
+const TradingEngine = require('./tradingEngine');
 const database = require('./database');
 
 class CopyTradingBot {
@@ -38,6 +39,8 @@ class CopyTradingBot {
             //console.log(`📱 Bot: @${botInfo.username}`);       
             //console.log(`🆔 Bot ID: ${botInfo.id}`);      
             console.log(`🔒 Encryption: AES-256-GCM enabled`);
+            this.tradingEngine = new TradingEngine(this.telegramBot);
+
 
             // Start webhook server
             console.log('🌐 Starting webhook server...');
