@@ -10,13 +10,13 @@ class TradingEngine {
         this.solanaService = new SolanaService();
         this.activeUsers = new Map();
         this.positions = new Map();
-        
+
         // Enhanced caching
         this.tokenInfoCache = new Map();
         this.priceCache = new Map();
         this.autoSellUsersCache = null;
         this.autoSellUsersCacheTime = 0;
-        
+
         // Cache expiry times (in milliseconds)
         this.cacheConfig = {
             tokenInfo: 5 * 60 * 1000, // 5 minutes
@@ -41,7 +41,7 @@ class TradingEngine {
         this.cacheCleanupInterval = null;
         this.startPositionMonitoring();
         this.startCacheCleanup();
-        
+
         // Trade statistics
         this.stats = {
             tradesProcessed: 0,
@@ -66,12 +66,12 @@ class TradingEngine {
     getCacheValue(cache, key) {
         const cached = cache.get(key);
         if (!cached) return null;
-        
+
         if (Date.now() > cached.expiry) {
             cache.delete(key);
             return null;
         }
-        
+
         return cached.value;
     }
 
@@ -85,7 +85,7 @@ class TradingEngine {
     cleanupExpiredCache() {
         const now = Date.now();
         const caches = [this.tokenInfoCache, this.priceCache];
-        
+
         caches.forEach(cache => {
             for (const [key, item] of cache.entries()) {
                 if (item.expiry && now > item.expiry) {
@@ -99,7 +99,7 @@ class TradingEngine {
     async processSwapSignal(swapDetails, alphaWallet) {
         try {
             this.stats.tradesProcessed++;
-            
+
             this.logWithTimestamp(
                 'Processing swap signal',
                 JSON.stringify({
@@ -114,7 +114,7 @@ class TradingEngine {
             );
 
             const users = await this.getUsersTrackingWallet(alphaWallet);
-            
+
             if (users.length === 0) {
                 this.logWithTimestamp(`No users tracking wallet ${alphaWallet}`);
                 return;
@@ -147,10 +147,10 @@ class TradingEngine {
                 WHERE aw.wallet_address = ? AND aw.active = 1 AND u.wallet_address IS NOT NULL
             `;
             const users = database.db.prepare(query).all(alphaWallet);
-            
+
             // Cache for 30 seconds
             this.setCacheWithExpiry(this.positions, cacheKey, users, this.cacheConfig.users);
-            
+
             return users;
         } catch (err) {
             this.logWithTimestamp('❌ DB error fetching users tracking wallet:', err);
@@ -190,7 +190,7 @@ class TradingEngine {
             if (side === 'buy' && existingPosition && existingPosition.isOpen) {
                 const scaleFactor = this.calculateScaleFactor(existingPosition, userTradeAmount, user);
                 userTradeAmount = userTradeAmount * scaleFactor;
-                
+
                 if (userTradeAmount <= 0.001) {
                     this.logWithTimestamp(`Position scaling resulted in minimal trade amount, skipping`);
                     return;
@@ -207,29 +207,30 @@ class TradingEngine {
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
             // === AXIOM-SPECIFIC SWAP ===
-            const sim = await this.simulateAxiomSwap(
-                tokenIn, 
-                tokenOut, 
-                userTradeAmount, 
-                Math.floor((user.slippage || 3) * 100)
+            const exec = await this.executeAxiomSwapWithRetry(
+                user.private_key,
+                {
+                    tokenIn,
+                    tokenOut,
+                    amountIn: userTradeAmount,
+                    slippageBps: Math.floor((user.slippage || 3) * 100)
+                },
+                3
             );
-            
-            if (!sim || !sim.outAmount || sim.outAmount <= 0) {
+
+            if (!exec?.signature) {
                 await this.notifyUser(user.telegram_id, 
-                    `❌ No viable Axiom route found for ${tokenInfo?.symbol || 'token'} trade.`
+                    `❌ Trade execution failed for ${tokenInfo?.symbol || 'token'}.`
                 );
                 return;
             }
-
-            // Enhanced execution with retry logic
-            const exec = await this.executeAxiomSwapWithRetry(user.private_key, sim, 3);
 
             const tradeResult = {
                 success: !!exec?.signature,
                 signature: exec?.signature || null,
                 inputAmount: userTradeAmount,
-                outputAmount: sim.outAmount,
-                priceImpact: sim.priceImpactPct || 0,
+                outputAmount: exec.outputAmount || 0,
+                priceImpact: exec.priceImpactPct || 0,
                 gasUsed: exec?.gasUsed || 0
             };
 
@@ -241,9 +242,9 @@ class TradingEngine {
                 tokenName: tokenInfo?.name || 'Unknown Token',
                 side,
                 amount: userTradeAmount,
-                price: sim.price || 0,
+                price: exec.price || 0,
                 signature: tradeResult.signature,
-                routeInfo: JSON.stringify(sim.routeInfo || {}),
+                routeInfo: JSON.stringify(exec.routeInfo || {}),
                 status: tradeResult.success ? 'completed' : 'failed',
                 priceImpact: tradeResult.priceImpact,
                 gasUsed: tradeResult.gasUsed
@@ -255,7 +256,7 @@ class TradingEngine {
                 this.stats.tradesSuccessful++;
                 await this.updateUserPosition(user.id, tradeData);
                 await this.notifyTradeSuccess(user.telegram_id, tradeData, tradeResult, tokenInfo);
-                
+
                 // Invalidate user position cache
                 const cacheKey = `${user.id}_${tradeData.tokenAddress}`;
                 this.positions.delete(cacheKey);
@@ -274,17 +275,17 @@ class TradingEngine {
     // === ENHANCED VALIDATION ===
     async preValidateTrade(user, swap) {
         const { side, tokenIn, tokenOut } = swap;
-        
+
         // Quick checks first
         if (!tokenIn || !tokenOut || tokenIn === tokenOut) return false;
-        
+
         // Check blacklist (cached)
         const tokenToCheck = side === 'buy' ? tokenOut : tokenIn;
         if (await this.isTokenBlacklisted(tokenToCheck)) {
             this.logWithTimestamp(`Token ${tokenToCheck?.slice(0, 8)} is blacklisted`);
             return false;
         }
-        
+
         // Check user wallet balance for buys
         if (side === 'buy') {
             const balance = await this.solanaService.getWalletBalance(user.wallet_address);
@@ -293,7 +294,7 @@ class TradingEngine {
                 return false;
             }
         }
-        
+
         return true;
     }
 
@@ -302,49 +303,30 @@ class TradingEngine {
         const positionValue = existingPosition.totalAmount * existingPosition.averagePrice;
         const newTradeValue = newTradeAmount;
         const maxPositionSize = (user.max_trade_amount || 0.1) * 3; // Allow 3x max trade as total position
-        
+
         if (positionValue + newTradeValue > maxPositionSize) {
             // Reduce trade size to stay within limits
             const allowedAddition = Math.max(0, maxPositionSize - positionValue);
             return Math.min(0.5, allowedAddition / newTradeValue);
         }
-        
+
         return 0.5; // Default 50% scaling for existing positions
     }
 
     // === AXIOM HELPERS WITH RETRY LOGIC ===
-    async simulateAxiomSwap(tokenIn, tokenOut, amountIn, slippageBps = 300) {
-        try {
-            const sim = await this.solanaService.simulateAxiom({
-                tokenIn,
-                tokenOut,
-                amountIn,
-                slippageBps
-            });
-            if (!sim || !sim.outAmount || sim.outAmount <= 0) return null;
-            return sim;
-        } catch (error) {
-            this.logWithTimestamp('❌ Error simulating Axiom swap:', error);
-            return null;
-        }
-    }
-
-    async executeAxiomSwapWithRetry(userPrivateKeyEncrypted, sim, maxRetries = 3) {
+    async executeAxiomSwapWithRetry(userPrivateKeyEncrypted, swapParams, maxRetries = 3) {
         let lastError;
-        
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const exec = await this.solanaService.executeAxiom({
                     userPrivateKeyEncrypted,
-                    tokenIn: sim.tokenIn,
-                    tokenOut: sim.tokenOut,
-                    amountIn: sim.amountIn,
-                    minOut: sim.minOut,
-                    routeInfo: sim.routeInfo,
-                    axiomAccounts: sim.axiomAccounts,
-                    axiomData: sim.axiomData
+                    tokenIn: swapParams.tokenIn,
+                    tokenOut: swapParams.tokenOut,
+                    amountIn: swapParams.amountIn,
+                    slippageBps: swapParams.slippageBps
                 });
-                
+
                 if (exec?.signature) {
                     this.logWithTimestamp(`Axiom swap successful on attempt ${attempt}`);
                     return exec;
@@ -352,14 +334,14 @@ class TradingEngine {
             } catch (error) {
                 lastError = error;
                 this.logWithTimestamp(`❌ Axiom swap attempt ${attempt} failed:`, error.message);
-                
+
                 if (attempt < maxRetries) {
                     // Exponential backoff
                     await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
                 }
             }
         }
-        
+
         this.logWithTimestamp(`❌ All ${maxRetries} Axiom swap attempts failed`);
         return null;
     }
@@ -402,7 +384,7 @@ class TradingEngine {
                     : tokenAddress);
                 const accountInfo = await this.solanaService.connection.getParsedAccountInfo(pubkey);
                 const decimals = accountInfo.value?.data?.parsed?.info?.decimals;
-                
+
                 if (decimals !== undefined) {
                     this.setCacheWithExpiry(this.tokenInfoCache, cacheKey, decimals, this.cacheConfig.tokenInfo);
                     return decimals;
@@ -410,7 +392,7 @@ class TradingEngine {
             } catch (innerErr) {
                 this.logWithTimestamp(`Not a valid public key, using default: ${tokenAddress?.slice(0, 8)}`);
             }
-            
+
             // Cache default value
             this.setCacheWithExpiry(this.tokenInfoCache, cacheKey, 9, this.cacheConfig.tokenInfo);
             return 9;
@@ -481,7 +463,7 @@ class TradingEngine {
     async getUserTokenPosition(userId, tokenAddress) {
         try {
             const cacheKey = `${userId}_${tokenAddress}`;
-            
+
             // Check cache first
             const cached = this.getCacheValue(this.positions, cacheKey);
             if (cached) return cached;
@@ -505,12 +487,12 @@ class TradingEngine {
             // Cache buy trades lookup
             const cacheKey = `buytrades_${user.id}_${tokenAddress}_${alphaWallet}`;
             let buyTrades = this.getCacheValue(this.positions, cacheKey);
-            
+
             if (!buyTrades) {
                 buyTrades = await database.getUserBuyTrades(user.id, tokenAddress, alphaWallet);
                 this.setCacheWithExpiry(this.positions, cacheKey, buyTrades, this.cacheConfig.users);
             }
-            
+
             return buyTrades.length > 0;
         } catch (error) {
             this.logWithTimestamp('❌ Error checking alpha wallet sell:', error);
@@ -570,15 +552,7 @@ class TradingEngine {
                 if (!position || !position.isOpen || position.totalAmount <= 0) return false;
             }
 
-            // Final route validation
-            const sim = await this.solanaService.simulateSwap({
-                tokenIn: swap.tokenIn,
-                tokenOut: swap.tokenOut,
-                amountIn: userTradeAmount,
-                slippageBps: Math.floor((user.slippage || 3) * 100)
-            });
-
-            return sim && sim.outAmount > 0;
+            return true;
         } catch (error) {
             this.logWithTimestamp('❌ Error validating trade:', error);
             return false;
@@ -590,12 +564,12 @@ class TradingEngine {
             // Cache blacklist check
             const cacheKey = 'blacklist_tokens';
             let blacklistedTokens = this.getCacheValue(this.tokenInfoCache, cacheKey);
-            
+
             if (!blacklistedTokens) {
                 blacklistedTokens = await database.getBlacklistedTokens();
                 this.setCacheWithExpiry(this.tokenInfoCache, cacheKey, blacklistedTokens, this.cacheConfig.tokenInfo);
             }
-            
+
             return blacklistedTokens.includes(tokenAddress);
         } catch (error) {
             this.logWithTimestamp('❌ Error checking token blacklist:', error);
@@ -606,12 +580,12 @@ class TradingEngine {
     // === ENHANCED MONITORING ===
     startPositionMonitoring() {
         if (this.positionMonitorInterval) clearInterval(this.positionMonitorInterval);
-        
+
         // Stagger monitoring intervals to reduce load
         this.positionMonitorInterval = setInterval(() => {
             this.monitorPositions();
         }, 30000);
-        
+
         this.logWithTimestamp('Position monitoring started with 30s interval');
     }
 
@@ -628,7 +602,7 @@ class TradingEngine {
                     positionsChecked++;
                 }
             }
-            
+
             const duration = Date.now() - startTime;
             this.logWithTimestamp(`Position monitoring completed: ${positionsChecked} positions in ${duration}ms`);
         } catch (error) {
@@ -645,7 +619,7 @@ class TradingEngine {
             const currentPrice = await this.priceLimiter.schedule(() => 
                 this.getCachedTokenPrice(position.tokenAddress)
             );
-            
+
             if (!currentPrice || currentPrice <= 0) return;
 
             const entryPrice = position.averagePrice;
@@ -659,7 +633,7 @@ class TradingEngine {
                 await this.executeAutoSell(user, position, 'take_profit', currentPrice);
                 return;
             }
-            
+
             if (currentProfitPercent <= -stopLossThreshold) {
                 this.logWithTimestamp(`Stop loss triggered: ${position.tokenSymbol} at ${currentProfitPercent.toFixed(2)}%`);
                 await this.executeAutoSell(user, position, 'stop_loss', currentPrice);
@@ -690,7 +664,7 @@ class TradingEngine {
     async executeAutoSell(user, position, reason, currentPrice) {
         try {
             this.logWithTimestamp(`Executing auto-sell for ${position.tokenSymbol}: ${reason}`);
-            
+
             const tokenInfo = await this.getTokenInfo(position.tokenAddress);
             if (!tokenInfo) {
                 this.logWithTimestamp('❌ Could not get token info for auto-sell');
@@ -698,28 +672,20 @@ class TradingEngine {
             }
 
             const wsol = 'So11111111111111111111111111111111111111112';
-            const sim = await this.solanaService.simulateSwap({
-                tokenIn: position.tokenAddress,
-                tokenOut: wsol,
-                amountIn: position.totalAmount,
-                slippageBps: Math.floor((user.slippage || 5) * 100) // Higher slippage for auto-sells
-            });
-            
-            if (!sim || !sim.outAmount || sim.outAmount <= 0) {
-                this.logWithTimestamp('❌ Auto-sell simulation failed');
-                return;
-            }
-
-            const exec = await this.executeAxiomSwapWithRetry(user.private_key, {
-                ...sim,
-                tokenIn: position.tokenAddress,
-                tokenOut: wsol,
-                amountIn: position.totalAmount
-            }, 2); // Fewer retries for auto-sell
+            const exec = await this.executeAxiomSwapWithRetry(
+                user.private_key,
+                {
+                    tokenIn: position.tokenAddress,
+                    tokenOut: wsol,
+                    amountIn: position.totalAmount,
+                    slippageBps: Math.floor((user.slippage || 5) * 100)
+                },
+                2
+            );
 
             if (exec?.signature) {
                 const profitLoss = ((currentPrice - position.averagePrice) / position.averagePrice) * 100;
-                
+
                 const tradeData = {
                     userId: user.id,
                     alphaWallet: 'AUTO_SELL',
@@ -730,7 +696,7 @@ class TradingEngine {
                     amount: position.totalAmount,
                     price: currentPrice,
                     signature: exec.signature,
-                    routeInfo: JSON.stringify(sim.routeInfo || {}),
+                    routeInfo: JSON.stringify(exec.routeInfo || {}),
                     status: 'completed',
                     autoSellReason: reason,
                     profitLoss: profitLoss
@@ -749,7 +715,7 @@ class TradingEngine {
 💵 <b>Entry:</b> $${position.averagePrice.toFixed(8)}
 💵 <b>Exit:</b> $${currentPrice.toFixed(8)}
 📈 <b>P&L:</b> ${profitLoss >= 0 ? '🟢' : '🔴'} ${profitLoss.toFixed(2)}%
-💎 <b>SOL Received:</b> ~${(sim.outAmount || 0).toFixed(4)}
+💎 <b>SOL Received:</b> ~${(exec.outputAmount || 0).toFixed(4)}
 🔗 <b>Tx:</b> <code>${exec.signature}</code>
 
 ⏰ <i>${new Date().toLocaleString()}</i>
@@ -809,7 +775,7 @@ class TradingEngine {
             const priceImpactDisplay = tradeResult.priceImpact > 0 
                 ? `📊 <b>Price Impact:</b> ${(tradeResult.priceImpact * 100).toFixed(2)}%\n` 
                 : '';
-            
+
             const gasDisplay = tradeResult.gasUsed > 0 
                 ? `⛽ <b>Gas Used:</b> ${(tradeResult.gasUsed / 1000000).toFixed(2)}M\n`
                 : '';
@@ -927,20 +893,20 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
     async performMaintenance() {
         try {
             this.logWithTimestamp('Starting engine maintenance...');
-            
+
             // Clean up expired caches
             this.cleanupExpiredCache();
-            
+
             // Clean up old trades
             await this.cleanupOldTrades();
-            
+
             // Update position cache
             await this.refreshPositionCache();
-            
+
             // Log statistics
             const stats = this.getEngineStats();
             this.logWithTimestamp('Engine stats:', JSON.stringify(stats, null, 2));
-            
+
             this.logWithTimestamp('Engine maintenance completed');
         } catch (error) {
             this.logWithTimestamp('❌ Error during maintenance:', error);
@@ -953,10 +919,10 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
             this.positions.clear();
             this.autoSellUsersCache = null;
             this.autoSellUsersCacheTime = 0;
-            
+
             // Pre-warm cache with active users
             await this.getUsersWithAutoSell();
-            
+
             this.logWithTimestamp('Position cache refreshed');
         } catch (error) {
             this.logWithTimestamp('❌ Error refreshing position cache:', error);
@@ -969,7 +935,7 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
             const result = await database.db
                 .prepare('DELETE FROM trades WHERE created_at < ? AND status != "pending"')
                 .run(thirtyDaysAgo);
-            
+
             if (result.changes > 0) {
                 this.logWithTimestamp(`Cleaned up ${result.changes} old trades`);
             }
@@ -982,21 +948,21 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
     async emergencyStopAllTrading(reason = 'Emergency stop activated') {
         try {
             this.logWithTimestamp(`🚨 Emergency stop triggered: ${reason}`);
-            
+
             // Disable all trading
             await database.db
                 .prepare('UPDATE users SET auto_sell_enabled = 0, max_trade_amount = 0')
                 .run();
-            
+
             // Clear caches
             this.autoSellUsersCache = null;
             this.positions.clear();
-            
+
             // Notify all active users
             const users = await database.db
                 .prepare('SELECT telegram_id FROM users WHERE wallet_address IS NOT NULL')
                 .all();
-            
+
             for (const user of users) {
                 await this.notifyUser(user.telegram_id, 
                     `🚨 <b>EMERGENCY STOP ACTIVATED</b>\n\n` +
@@ -1005,7 +971,7 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
                     `Please contact support if you need assistance.`
                 );
             }
-            
+
             this.logWithTimestamp(`Emergency stop completed - notified ${users.length} users`);
         } catch (error) {
             this.logWithTimestamp('❌ Error during emergency stop:', error);
@@ -1031,7 +997,7 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
 
             // Clear user from cache
             this.autoSellUsersCache = null;
-            
+
             this.logWithTimestamp(`Trading paused for user ${userId}: ${reason}`);
         } catch (error) {
             this.logWithTimestamp('❌ Error pausing user trading:', error);
@@ -1041,38 +1007,38 @@ ${priceImpactDisplay}${gasDisplay}🔗 <b>Signature:</b> <code>${tradeResult.sig
     // === CLEANUP AND SHUTDOWN ===
     async gracefulShutdown() {
         this.logWithTimestamp('🔄 Starting graceful shutdown...');
-        
+
         try {
             // Stop intervals
             if (this.positionMonitorInterval) {
                 clearInterval(this.positionMonitorInterval);
                 this.positionMonitorInterval = null;
             }
-            
+
             if (this.cacheCleanupInterval) {
                 clearInterval(this.cacheCleanupInterval);
                 this.cacheCleanupInterval = null;
             }
-            
+
             // Stop rate limiters
             if (this.tradeLimiter) {
                 await this.tradeLimiter.stop();
             }
-            
+
             if (this.priceLimiter) {
                 await this.priceLimiter.stop();
             }
-            
+
             // Perform final maintenance
             await this.performMaintenance();
-            
+
             // Clear all caches
             this.positions.clear();
             this.tokenInfoCache.clear();
             this.priceCache.clear();
             this.activeUsers.clear();
             this.autoSellUsersCache = null;
-            
+
             this.logWithTimestamp('✅ Graceful shutdown completed');
         } catch (error) {
             this.logWithTimestamp('❌ Error during graceful shutdown:', error);
