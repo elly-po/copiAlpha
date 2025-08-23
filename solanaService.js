@@ -1,6 +1,6 @@
-const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+// solanaService.js
+const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getMint } = require('@solana/spl-token');
-const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 
 // Metaplex Token Metadata Program ID
@@ -9,12 +9,38 @@ const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-        
+
         // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
             maxConcurrent: 5,
             minTime: 200
         });
+
+        // Simple in-memory caches
+        this.tokenMetadataCache = new Map();
+        this.priceCache = new Map();
+        this.cacheConfig = {
+            tokenMetadata: 5 * 60 * 1000, // 5 minutes
+            price: 30 * 1000 // 30 seconds
+        };
+    }
+
+    log(...args) {
+        console.log(new Date().toISOString(), ...args);
+    }
+
+    setCacheWithExpiry(cache, key, value, expiry) {
+        cache.set(key, { value, expiry: Date.now() + expiry });
+    }
+
+    getCacheValue(cache, key) {
+        const cached = cache.get(key);
+        if (!cached) return null;
+        if (Date.now() > cached.expiry) {
+            cache.delete(key);
+            return null;
+        }
+        return cached.value;
     }
 
     async validateWallet(publicKeyStr) {
@@ -24,7 +50,7 @@ class SolanaService {
                 this.connection.getAccountInfo(publicKey)
             );
             return accountInfo !== null;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -37,7 +63,7 @@ class SolanaService {
             );
             return balance / LAMPORTS_PER_SOL;
         } catch (error) {
-            console.error('Error getting wallet balance:', error);
+            this.log('Error getting wallet balance:', error);
             return 0;
         }
     }
@@ -46,25 +72,22 @@ class SolanaService {
         try {
             const publicKey = new PublicKey(publicKeyStr);
             const tokenAccounts = await this.limiter.schedule(() => 
-                this.connection.getTokenAccountsByOwner(publicKey, {
-                    programId: TOKEN_PROGRAM_ID
-                })
+                this.connection.getTokenAccountsByOwner(publicKey, { programId: TOKEN_PROGRAM_ID })
             );
-            
             return tokenAccounts.value.map(account => ({
                 pubkey: account.pubkey.toString(),
                 account: account.account
             }));
         } catch (error) {
-            console.error('Error getting token accounts:', error);
+            this.log('Error getting token accounts:', error);
             return [];
         }
     }
 
     async getTokenMetadata(mintAddress) {
         try {
-            // ✅ Special-case for SOL
-            if (mintAddress === "So11111111111111111111111111111111111111112" || mintAddress === "SOL") {
+            // Special-case for SOL
+            if (mintAddress === "SOL" || mintAddress === "So11111111111111111111111111111111111111112") {
                 return {
                     mint: "So11111111111111111111111111111111111111112",
                     name: "Solana",
@@ -73,41 +96,48 @@ class SolanaService {
                     logoURI: "https://cryptologos.cc/logos/solana-sol-logo.png"
                 };
             }
-            
+
+            // Check cache
+            const cached = this.getCacheValue(this.tokenMetadataCache, mintAddress);
+            if (cached) return cached;
+
             const mintPubkey = new PublicKey(mintAddress);
             const mintInfo = await this.limiter.schedule(() => getMint(this.connection, mintPubkey));
-            
-            // Derive PDA for metadata
+
+            // Derive metadata PDA
             const [metadataPDA] = await PublicKey.findProgramAddress(
                 [
                     Buffer.from("metadata"),
                     METADATA_PROGRAM_ID.toBuffer(),
-                    mintPubkey.toBuffer(),
+                    mintPubkey.toBuffer()
                 ],
                 METADATA_PROGRAM_ID
             );
-            
+
             const accountInfo = await this.connection.getAccountInfo(metadataPDA);
             let name = "Unknown Token";
             let symbol = "UNKNOWN";
             let uri = null;
-            
+
             if (accountInfo?.data) {
                 const data = accountInfo.data;
                 name = data.slice(1, 33).toString().replace(/\0/g, "") || name;
                 symbol = data.slice(33, 43).toString().replace(/\0/g, "") || symbol;
                 uri = data.slice(43, 243).toString().replace(/\0/g, "") || null;
             }
-            
-            return {
+
+            const tokenData = {
                 mint: mintAddress,
                 name,
                 symbol,
                 decimals: mintInfo.decimals ?? 9,
                 logoURI: uri
             };
+
+            this.setCacheWithExpiry(this.tokenMetadataCache, mintAddress, tokenData, this.cacheConfig.tokenMetadata);
+            return tokenData;
         } catch (error) {
-            console.warn(`⚠️ Metadata fetch failed for ${mintAddress}: ${error.message}`);
+            this.log(`⚠️ Metadata fetch failed for ${mintAddress}:`, error.message);
             return {
                 mint: mintAddress,
                 name: "Unknown Token",
@@ -115,6 +145,22 @@ class SolanaService {
                 decimals: 9,
                 logoURI: null
             };
+        }
+    }
+
+    async getIndicativePriceUSD(tokenAddress) {
+        try {
+            // Placeholder logic; replace with real price fetch
+            const cached = this.getCacheValue(this.priceCache, tokenAddress);
+            if (cached) return cached;
+
+            // Example: fetch from some price oracle or API
+            const price = Math.random() * 100; // dummy price
+            this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
+            return price;
+        } catch (error) {
+            this.log('Error fetching token price:', error);
+            return 0;
         }
     }
 }
