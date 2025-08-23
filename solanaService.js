@@ -163,6 +163,30 @@ class SolanaService {
             return 0;
         }
     }
+    
+    async executeAxiom({ userPrivateKeyEncrypted, tokenIn, tokenOut, amountIn, minOut, routeInfo }) {
+        try {
+            // Decode private key
+            const privateKeyBytes = bs58.decode(userPrivateKeyEncrypted);
+            const keypair = {
+                publicKey: new PublicKey(privateKeyBytes.slice(32)),
+                secretKey: privateKeyBytes
+            };
+            
+            // TODO: integrate real Axiom swap instructions here
+            const tx = new Transaction().add(
+                SystemProgram.transfer({
+                    fromPubkey: keypair.publicKey,
+                    toPubkey: keypair.publicKey, // replace with actual Axiom swap program account
+                    lamports: 1 // placeholder lamports
+                        })
+            );
+            const signature = await sendAndConfirmTransaction(this.connection, tx, [keypair]);
+            return { signature, gasUsed: 0 }; // placeholder
+        } catch (error) {
+            throw new Error(`Live Axiom execution failed: ${error.message}`);
+        }
+    }
 }
 
 module.exports = SolanaService;
