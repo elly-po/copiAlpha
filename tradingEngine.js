@@ -369,7 +369,7 @@ class TradingEngine {
     }
 
     // === AXIOM HELPERS WITH RETRY LOGIC ===
-    async executeAxiomSwapWithRetry(userPrivateKey, swapParams, maxRetries = 3) {
+    async executeAxiomSwapWithRetry(decryptedKey, swapParams, maxRetries = 3) {
         let lastError;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
