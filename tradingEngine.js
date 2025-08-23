@@ -7,6 +7,7 @@ const { PublicKey } = require('@solana/web3.js');
 class TradingEngine {
     constructor(telegramBotInstance) {
         this.telegramBot = telegramBotInstance;
+        this.bot = telegramBotInstance.getBot();
         this.solanaService = new SolanaService();
         this.activeUsers = new Map();
         this.positions = new Map();
