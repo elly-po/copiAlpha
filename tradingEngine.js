@@ -262,21 +262,14 @@ class TradingEngine {
 
             // === AXIOM-SPECIFIC SWAP ===
             const decryptedKey = this.decryptPrivateKey(user.private_key);
-            this.logWithTimestamp("Decrypted key type:", typeof decryptedKey, "length:", decryptedKey?.length,"key:", decryptedKey);
-            this.logWithTimestamp("Axiom params types:", {
-                decryptedKey: typeof decryptedKey,
-                tokenIn: typeof tokenIn,
-                tokenOut: typeof tokenOut,
-                amountIn: typeof userTradeAmount,
-                slippageBps: typeof Math.floor((user.slippage || 3) * 100)
-            });
-            this.logWithTimestamp("Axiom params values:", {
-                decryptedKey: decryptedKey?.slice(0, 8) + "...",
+            
+            this.logWithTimestamp("Axiom swap params:", {
                 tokenIn,
                 tokenOut,
                 amountIn: userTradeAmount,
                 slippageBps: Math.floor((user.slippage || 3) * 100)
             });
+
             const exec = await this.executeAxiomSwapWithRetry(
                 decryptedKey,
                 {
@@ -298,9 +291,9 @@ class TradingEngine {
             const tradeResult = {
                 success: !!exec?.signature,
                 signature: exec?.signature || null,
-                inputAmount: userTradeAmount,
+                inputAmount: exec.inputAmount || userTradeAmount,
                 outputAmount: exec.outputAmount || 0,
-                priceImpact: exec.priceImpactPct || 0,
+                priceImpact: exec.priceImpact || 0,
                 gasUsed: exec?.gasUsed || 0
             };
 
@@ -389,7 +382,7 @@ class TradingEngine {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const exec = await this.solanaService.executeAxiom({
+                const exec = await this.solanaService.executeAxiomSwap({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
                     tokenOut: swapParams.tokenOut,
