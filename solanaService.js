@@ -3,6 +3,7 @@ const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sen
 const bs58 = require('bs58');
 const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getMint } = require('@solana/spl-token');
 const Bottleneck = require('bottleneck');
+const axios = require('axios');
 
 // Metaplex Token Metadata Program ID
 const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
@@ -151,41 +152,122 @@ class SolanaService {
 
     async getIndicativePriceUSD(tokenAddress) {
         try {
-            // Placeholder logic; replace with real price fetch
+            // Check cache first
             const cached = this.getCacheValue(this.priceCache, tokenAddress);
             if (cached) return cached;
 
-            // Example: fetch from some price oracle or API
-            const price = Math.random() * 100; // dummy price
-            this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
+            let price = 0;
+
+            // Handle SOL case
+            if (tokenAddress === "SOL" || tokenAddress === "So11111111111111111111111111111111111111112") {
+                try {
+                    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+                    price = response.data.solana?.usd || 0;
+                } catch (error) {
+                    this.log('Error fetching SOL price:', error.message);
+                    // Fallback to Jupiter if Coingecko fails
+                    price = await this.fetchJupiterPrice("So11111111111111111111111111111111111111112");
+                }
+            } else {
+                // Use Jupiter API for token prices
+                price = await this.fetchJupiterPrice(tokenAddress);
+            }
+
+            if (price > 0) {
+                this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
+            }
+
             return price;
         } catch (error) {
             this.log('Error fetching token price:', error);
             return 0;
         }
     }
+
+    async fetchJupiterPrice(tokenAddress) {
+        try {
+            const response = await axios.get(
+                `https://quote-api.jup.ag/v6/price?ids=${tokenAddress}`
+            );
+            
+            if (response.data.data && response.data.data[tokenAddress]) {
+                return parseFloat(response.data.data[tokenAddress].price);
+            }
+            
+            return 0;
+        } catch (error) {
+            this.log('Error fetching Jupiter price:', error.message);
+            return 0;
+        }
+    }
     
-    async executeAxiom({ userPrivateKey, tokenIn, tokenOut, amountIn, minOut, routeInfo }) {
+    async executeAxiomSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps }) {
         try {
             // Decode private key
-            const privateKeyBytes = bs58.decode(userPrivateKey);
+            const privateKeyBytes = bs58.decode(decryptedKey);
             const keypair = {
                 publicKey: new PublicKey(privateKeyBytes.slice(32)),
                 secretKey: privateKeyBytes
             };
+
+            // Get quote from Jupiter
+            const quote = await this.getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps);
             
-            // TODO: integrate real Axiom swap instructions here
-            const tx = new Transaction().add(
-                SystemProgram.transfer({
-                    fromPubkey: keypair.publicKey,
-                    toPubkey: keypair.publicKey, // replace with actual Axiom swap program account
-                    lamports: 1 // placeholder lamports
-                        })
-            );
-            const signature = await sendAndConfirmTransaction(this.connection, tx, [keypair]);
-            return { signature, gasUsed: 0 }; // placeholder
+            if (!quote) {
+                throw new Error('Failed to get swap quote');
+            }
+
+            // Perform the swap using Jupiter
+            const { execute } = await import('@jup-ag/api');
+            
+            const swapResult = await execute({
+                quote,
+                userPublicKey: keypair.publicKey,
+                dynamicComputeUnitLimit: true,
+                dynamicSlippage: true,
+            });
+
+            if (!swapResult.txid) {
+                throw new Error('Swap execution failed');
+            }
+
+            // Wait for confirmation
+            const confirmation = await this.connection.confirmTransaction(swapResult.txid, 'confirmed');
+            
+            if (confirmation.value.err) {
+                throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+            }
+
+            return { 
+                signature: swapResult.txid,
+                inputAmount: amountIn,
+                outputAmount: quote.outAmount,
+                priceImpact: quote.priceImpactPct,
+                gasUsed: quote.otherFeeThreshold
+            };
         } catch (error) {
-            throw new Error(`Live Axiom execution failed: ${error.message}`);
+            throw new Error(`Axiom swap execution failed: ${error.message}`);
+        }
+    }
+
+    async getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps) {
+        try {
+            const response = await axios.get(
+                `https://quote-api.jup.ag/v6/quote?` +
+                `inputMint=${tokenIn}&` +
+                `outputMint=${tokenOut}&` +
+                `amount=${amountIn}&` +
+                `slippageBps=${slippageBps}`
+            );
+
+            if (response.data && response.data.routePlan) {
+                return response.data;
+            }
+            
+            return null;
+        } catch (error) {
+            this.log('Error getting Jupiter quote:', error.message);
+            return null;
         }
     }
 }
