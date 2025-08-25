@@ -171,7 +171,7 @@ class SolanaService {
             this.log("💰 Raw amount for PumpSwap:", { rawAmount });
             this.log("🚀 PumpSwap execution requested:", { tokenIn, tokenOut, amountIn: rawAmount, slippageBps });
             // Call PumpSwap API with raw units
-            const response = await axios.post('https://api.pumpswap.io/v1/swap', {
+            const response = await axios.post('https://docs-demo.solana-mainnet.quiknode.pro/pump-fun/swap', {
                 wallet: keypair.publicKey.toBase58(),
                 tokenIn,
                 tokenOut,
