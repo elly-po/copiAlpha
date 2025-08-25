@@ -1,7 +1,6 @@
 // solanaService.js
-const { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { Connection, PublicKey, LAMPORTS_PER_SOL, getMint } = require('@solana/web3.js');
 const bs58 = require('bs58');
-const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getMint } = require('@solana/spl-token');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
 
@@ -48,7 +47,7 @@ class SolanaService {
     async validateWallet(publicKeyStr) {
         try {
             const publicKey = new PublicKey(publicKeyStr);
-            const accountInfo = await this.limiter.schedule(() => 
+            const accountInfo = await this.limiter.schedule(() =>
                 this.connection.getAccountInfo(publicKey)
             );
             return accountInfo !== null;
@@ -60,7 +59,7 @@ class SolanaService {
     async getWalletBalance(publicKeyStr) {
         try {
             const publicKey = new PublicKey(publicKeyStr);
-            const balance = await this.limiter.schedule(() => 
+            const balance = await this.limiter.schedule(() =>
                 this.connection.getBalance(publicKey)
             );
             return balance / LAMPORTS_PER_SOL;
@@ -70,25 +69,8 @@ class SolanaService {
         }
     }
 
-    async getTokenAccounts(publicKeyStr) {
-        try {
-            const publicKey = new PublicKey(publicKeyStr);
-            const tokenAccounts = await this.limiter.schedule(() => 
-                this.connection.getTokenAccountsByOwner(publicKey, { programId: TOKEN_PROGRAM_ID })
-            );
-            return tokenAccounts.value.map(account => ({
-                pubkey: account.pubkey.toString(),
-                account: account.account
-            }));
-        } catch (error) {
-            this.log('Error getting token accounts:', error);
-            return [];
-        }
-    }
-
     async getTokenMetadata(mintAddress) {
         try {
-            // Special-case for SOL
             if (mintAddress === "SOL" || mintAddress === "So11111111111111111111111111111111111111112") {
                 return {
                     mint: "So11111111111111111111111111111111111111112",
@@ -99,20 +81,14 @@ class SolanaService {
                 };
             }
 
-            // Check cache
             const cached = this.getCacheValue(this.tokenMetadataCache, mintAddress);
             if (cached) return cached;
 
             const mintPubkey = new PublicKey(mintAddress);
             const mintInfo = await this.limiter.schedule(() => getMint(this.connection, mintPubkey));
 
-            // Derive metadata PDA
             const [metadataPDA] = await PublicKey.findProgramAddress(
-                [
-                    Buffer.from("metadata"),
-                    METADATA_PROGRAM_ID.toBuffer(),
-                    mintPubkey.toBuffer()
-                ],
+                [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
                 METADATA_PROGRAM_ID
             );
 
@@ -140,68 +116,45 @@ class SolanaService {
             return tokenData;
         } catch (error) {
             this.log(`⚠️ Metadata fetch failed for ${mintAddress}:`, error.message);
-            return {
-                mint: mintAddress,
-                name: "Unknown Token",
-                symbol: "UNKNOWN",
-                decimals: 9,
-                logoURI: null
-            };
+            return { mint: mintAddress, name: "Unknown Token", symbol: "UNKNOWN", decimals: 9, logoURI: null };
         }
     }
 
     async getIndicativePriceUSD(tokenAddress) {
         try {
-            // Check cache first
             const cached = this.getCacheValue(this.priceCache, tokenAddress);
             if (cached) return cached;
 
             let price = 0;
-
-            // Handle SOL case
             if (tokenAddress === "SOL" || tokenAddress === "So11111111111111111111111111111111111111112") {
                 try {
                     const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
                     price = response.data.solana?.usd || 0;
-                } catch (error) {
-                    this.log('Error fetching SOL price:', error.message);
-                    // Fallback to Jupiter if Coingecko fails
-                    price = await this.fetchJupiterPrice("So11111111111111111111111111111111111111112");
+                } catch {
+                    price = 0;
                 }
             } else {
-                // Use Jupiter API for token prices
-                price = await this.fetchJupiterPrice(tokenAddress);
+                price = await this.fetchPumpSwapPrice(tokenAddress);
             }
 
-            if (price > 0) {
-                this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
-            }
-
+            if (price > 0) this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
             return price;
-        } catch (error) {
-            this.log('Error fetching token price:', error);
+        } catch {
             return 0;
         }
     }
 
-    async fetchJupiterPrice(tokenAddress) {
+    async fetchPumpSwapPrice(tokenAddress) {
         try {
-            const response = await axios.get(
-                `https://quote-api.jup.ag/v6/price?ids=${tokenAddress}`
-            );
-            
-            if (response.data.data && response.data.data[tokenAddress]) {
-                return parseFloat(response.data.data[tokenAddress].price);
-            }
-            
-            return 0;
+            const response = await axios.get(`https://api.pumpswap.io/v1/price/${tokenAddress}`);
+            return response.data?.price || 0;
         } catch (error) {
-            this.log('Error fetching Jupiter price:', error.message);
+            this.log('Error fetching PumpSwap price:', error.message);
             return 0;
         }
     }
-    
-    async executeAxiomSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps }) {
+
+    async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps }) {
         try {
             // Decode private key
             const privateKeyBytes = bs58.decode(decryptedKey);
@@ -210,74 +163,32 @@ class SolanaService {
                 secretKey: privateKeyBytes
             };
 
-            // Get quote from Jupiter
-            const quote = await this.getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps);
-            
-            if (!quote) {
-                throw new Error('Failed to get swap quote');
-            }
-
-            // Perform the swap using Jupiter
-            const { execute } = await import('@jup-ag/api');
-            
-            const swapResult = await execute({
-                quote,
-                userPublicKey: keypair.publicKey,
-                dynamicComputeUnitLimit: true,
-                dynamicSlippage: true,
+            // Call PumpSwap API
+            const response = await axios.post('https://api.pumpswap.io/v1/swap', {
+                wallet: keypair.publicKey.toBase58(),
+                tokenIn,
+                tokenOut,
+                amountIn,
+                slippageBps
             });
 
-            if (!swapResult.txid) {
-                throw new Error('Swap execution failed');
-            }
+            const result = response.data;
 
-            // Wait for confirmation
-            const confirmation = await this.connection.confirmTransaction(swapResult.txid, 'confirmed');
-            
-            if (confirmation.value.err) {
-                throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-            }
+            if (!result?.txid) throw new Error('PumpSwap execution failed');
 
-            return { 
-                signature: swapResult.txid,
+            // Wait for transaction confirmation
+            const confirmation = await this.connection.confirmTransaction(result.txid, 'confirmed');
+            if (confirmation.value.err) throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+
+            return {
+                signature: result.txid,
                 inputAmount: amountIn,
-                outputAmount: quote.outAmount,
-                priceImpact: quote.priceImpactPct,
-                gasUsed: quote.otherFeeThreshold
+                outputAmount: result.outAmount,
+                priceImpact: result.priceImpactPct,
+                gasUsed: result.gasUsed
             };
         } catch (error) {
-            throw new Error(`Axiom swap execution failed: ${error.message}`);
-        }
-    }
-
-    async getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps, decimals = 9) {
-        try {
-            // ✅ Ensure amount is converted into raw integer units
-            const adjustedAmount = Math.floor(Number(amountIn) * (10 ** decimals));
-            
-            const url =
-                `https://quote-api.jup.ag/v6/quote?` +
-                `inputMint=${tokenIn}&` +
-                `outputMint=${tokenOut}&` +
-                `amount=${adjustedAmount}&` +
-                `slippageBps=${slippageBps}`;
-            
-            this.log("📡 Jupiter quote request:", { tokenIn, tokenOut, amountIn, adjustedAmount, decimals, slippageBps, url });
-            const response = await axios.get(url);
-            
-            if (response.data && response.data.routePlan) {
-                return response.data;
-            }
-            this.log("⚠️ Jupiter returned no route for:", { tokenIn, tokenOut, adjustedAmount });
-            return null;
-        } catch (error) {
-            this.log("❌ Error getting Jupiter quote:", {
-                status: error.response?.status,
-                data: error.response?.data,
-                headers: error.response?.headers,
-                message: error.message,
-            });
-            return null;
+            throw new Error(`PumpSwap execution failed: ${error.message}`);
         }
     }
 }
