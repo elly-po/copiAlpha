@@ -250,23 +250,33 @@ class SolanaService {
         }
     }
 
-    async getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps) {
+    async getJupiterQuote(tokenIn, tokenOut, amountIn, slippageBps, decimals = 9) {
         try {
-            const response = await axios.get(
+            // ✅ Ensure amount is converted into raw integer units
+            const adjustedAmount = Math.floor(Number(amountIn) * (10 ** decimals));
+            
+            const url =
                 `https://quote-api.jup.ag/v6/quote?` +
                 `inputMint=${tokenIn}&` +
                 `outputMint=${tokenOut}&` +
-                `amount=${amountIn}&` +
-                `slippageBps=${slippageBps}`
-            );
-
+                `amount=${adjustedAmount}&` +
+                `slippageBps=${slippageBps}`;
+            
+            this.log("📡 Jupiter quote request:", { tokenIn, tokenOut, amountIn, adjustedAmount, decimals, slippageBps, url });
+            const response = await axios.get(url);
+            
             if (response.data && response.data.routePlan) {
                 return response.data;
             }
-            
+            this.log("⚠️ Jupiter returned no route for:", { tokenIn, tokenOut, adjustedAmount });
             return null;
         } catch (error) {
-            this.log('Error getting Jupiter quote:', error.message);
+            this.log("❌ Error getting Jupiter quote:", {
+                status: error.response?.status,
+                data: error.response?.data,
+                headers: error.response?.headers,
+                message: error.message,
+            });
             return null;
         }
     }
