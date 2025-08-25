@@ -162,27 +162,35 @@ class SolanaService {
                 publicKey: new PublicKey(privateKeyBytes.slice(32)),
                 secretKey: privateKeyBytes
             };
-
-            // Call PumpSwap API
+            // Fetch token decimals
+            const tokenInMetadata = await this.getTokenMetadata(tokenIn);
+            const decimals = tokenInMetadata?.decimals ?? 9;
+            // Convert human-readable amount to raw units
+            const rawAmount = Math.floor(Number(amountIn) * (10 ** decimals));
+            // Log raw amount being sent on-chain
+            this.log("💰 Raw amount for PumpSwap:", { rawAmount });
+            this.log("🚀 PumpSwap execution requested:", { tokenIn, tokenOut, amountIn: rawAmount, slippageBps });
+            // Call PumpSwap API with raw units
             const response = await axios.post('https://api.pumpswap.io/v1/swap', {
                 wallet: keypair.publicKey.toBase58(),
                 tokenIn,
                 tokenOut,
-                amountIn,
+                amountIn: rawAmount,
                 slippageBps
             });
-
+            
             const result = response.data;
-
             if (!result?.txid) throw new Error('PumpSwap execution failed');
-
+            
             // Wait for transaction confirmation
             const confirmation = await this.connection.confirmTransaction(result.txid, 'confirmed');
             if (confirmation.value.err) throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-
+            
+            this.log("✅ PumpSwap executed successfully:", { txid: result.txid });
+            
             return {
                 signature: result.txid,
-                inputAmount: amountIn,
+                inputAmount: rawAmount,
                 outputAmount: result.outAmount,
                 priceImpact: result.priceImpactPct,
                 gasUsed: result.gasUsed
