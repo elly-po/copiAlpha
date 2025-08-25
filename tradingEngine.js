@@ -263,14 +263,14 @@ class TradingEngine {
             // === AXIOM-SPECIFIC SWAP ===
             const decryptedKey = this.decryptPrivateKey(user.private_key);
             
-            this.logWithTimestamp("Axiom swap params:", {
+            this.logWithTimestamp("PumpSwap params:", {
                 tokenIn,
                 tokenOut,
                 amountIn: userTradeAmount,
                 slippageBps: Math.floor((user.slippage || 3) * 100)
             });
 
-            const exec = await this.executeAxiomSwapWithRetry(
+            const exec = await this.executePumpSwapWithRetry(
                 decryptedKey,
                 {
                     tokenIn,
@@ -377,35 +377,30 @@ class TradingEngine {
     }
 
     // === AXIOM HELPERS WITH RETRY LOGIC ===
-    async executeAxiomSwapWithRetry(decryptedKey, swapParams, maxRetries = 3) {
+    async executePumpSwapWithRetry(decryptedKey, swapParams, maxRetries = 3) {
         let lastError;
-
+        
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const exec = await this.solanaService.executeAxiomSwap({
+                const exec = await this.solanaService.executePumpSwap({
                     decryptedKey,
                     tokenIn: swapParams.tokenIn,
                     tokenOut: swapParams.tokenOut,
                     amountIn: swapParams.amountIn,
                     slippageBps: swapParams.slippageBps
                 });
-
+                
                 if (exec?.signature) {
-                    this.logWithTimestamp(`Axiom swap successful on attempt ${attempt}`);
+                    this.logWithTimestamp(`✅ PumpSwap successful on attempt ${attempt}`);
                     return exec;
                 }
             } catch (error) {
                 lastError = error;
-                this.logWithTimestamp(`❌ Axiom swap attempt ${attempt} failed:`, error.message);
-
-                if (attempt < maxRetries) {
-                    // Exponential backoff
-                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
-                }
+                this.logWithTimestamp(`❌ PumpSwap attempt ${attempt} failed:`, error.message);
+                if (attempt < maxRetries) await new Promise(res => setTimeout(res, Math.pow(2, attempt) * 1000));
             }
         }
-
-        this.logWithTimestamp(`❌ All ${maxRetries} Axiom swap attempts failed`);
+        this.logWithTimestamp(`❌ All ${maxRetries} PumpSwap attempts failed`);
         return null;
     }
 
