@@ -141,17 +141,20 @@ class SolanaService {
     }
 
     // -------------------- SWAP --------------------
-    async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, poolPDA, side = 'buy' }) {
+    async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, side = 'buy' }) {
         try {
             const secretKey = bs58.decode(decryptedKey);
             const payer = Keypair.fromSecretKey(secretKey);
 
             // Normalize SOL token
             const wsol = 'So11111111111111111111111111111111111111112';
-
+            if (tokenIn === 'SOL') tokenIn = wsol;
+            if (tokenOut === 'SOL') tokenOut = wsol;
+            
+            // 1. Get pool state (SDK derives the pool PDA automatically)
             const { globalConfig, pool } = await this.sdk.swapSolanaState(
-                new PublicKey(poolPDA),
-                payer.publicKey
+                new PublicKey(tokenIn),
+                new PublicKey(tokenOut)
             );
 
             let instructions, inputAmount, outputAmount;
