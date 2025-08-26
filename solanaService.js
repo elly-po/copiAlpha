@@ -1,5 +1,13 @@
 // solanaService.js
-const { Connection, PublicKey, LAMPORTS_PER_SOL, getMint } = require('@solana/web3.js');
+const {
+    Connection,
+    PublicKey,
+    LAMPORTS_PER_SOL,
+    Transaction,
+    sendAndConfirmTransaction,
+    Keypair
+} = require('@solana/web3.js');
+const { PumpSdk } = require('@pump-fun/pump-sdk');
 const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
@@ -10,6 +18,7 @@ const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
+        this.sdk = new PumpSdk(this.connection);
 
         // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
@@ -17,12 +26,12 @@ class SolanaService {
             minTime: 200
         });
 
-        // Simple in-memory caches
+        // In-memory caches
         this.tokenMetadataCache = new Map();
         this.priceCache = new Map();
         this.cacheConfig = {
-            tokenMetadata: 5 * 60 * 1000, // 5 minutes
-            price: 30 * 1000 // 30 seconds
+            tokenMetadata: 5 * 60 * 1000,
+            price: 30 * 1000
         };
     }
 
@@ -30,6 +39,7 @@ class SolanaService {
         console.log(new Date().toISOString(), ...args);
     }
 
+    // -------------------- CACHE HELPERS --------------------
     setCacheWithExpiry(cache, key, value, expiry) {
         cache.set(key, { value, expiry: Date.now() + expiry });
     }
@@ -44,6 +54,7 @@ class SolanaService {
         return cached.value;
     }
 
+    // -------------------- WALLET HELPERS --------------------
     async validateWallet(publicKeyStr) {
         try {
             const publicKey = new PublicKey(publicKeyStr);
@@ -69,6 +80,7 @@ class SolanaService {
         }
     }
 
+    // -------------------- TOKEN METADATA --------------------
     async getTokenMetadata(mintAddress) {
         try {
             if (mintAddress === "SOL" || mintAddress === "So11111111111111111111111111111111111111112") {
@@ -85,31 +97,17 @@ class SolanaService {
             if (cached) return cached;
 
             const mintPubkey = new PublicKey(mintAddress);
-            const mintInfo = await this.limiter.schedule(() => getMint(this.connection, mintPubkey));
-
-            const [metadataPDA] = await PublicKey.findProgramAddress(
-                [Buffer.from("metadata"), METADATA_PROGRAM_ID.toBuffer(), mintPubkey.toBuffer()],
-                METADATA_PROGRAM_ID
+            const mintInfo = await this.limiter.schedule(() =>
+                this.connection.getParsedAccountInfo(mintPubkey)
             );
 
-            const accountInfo = await this.connection.getAccountInfo(metadataPDA);
-            let name = "Unknown Token";
-            let symbol = "UNKNOWN";
-            let uri = null;
-
-            if (accountInfo?.data) {
-                const data = accountInfo.data;
-                name = data.slice(1, 33).toString().replace(/\0/g, "") || name;
-                symbol = data.slice(33, 43).toString().replace(/\0/g, "") || symbol;
-                uri = data.slice(43, 243).toString().replace(/\0/g, "") || null;
-            }
-
+            const decimals = mintInfo?.value?.data?.parsed?.info?.decimals ?? 9;
             const tokenData = {
                 mint: mintAddress,
-                name,
-                symbol,
-                decimals: mintInfo.decimals ?? 9,
-                logoURI: uri
+                name: "Unknown Token",
+                symbol: "UNKNOWN",
+                decimals,
+                logoURI: null
             };
 
             this.setCacheWithExpiry(this.tokenMetadataCache, mintAddress, tokenData, this.cacheConfig.tokenMetadata);
@@ -120,6 +118,7 @@ class SolanaService {
         }
     }
 
+    // -------------------- PRICE --------------------
     async getIndicativePriceUSD(tokenAddress) {
         try {
             const cached = this.getCacheValue(this.priceCache, tokenAddress);
@@ -134,7 +133,7 @@ class SolanaService {
                     price = 0;
                 }
             } else {
-                price = await this.fetchPumpSwapPrice(tokenAddress);
+                price = 0; // placeholder, could fetch from pump.fun price API
             }
 
             if (price > 0) this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
@@ -144,59 +143,80 @@ class SolanaService {
         }
     }
 
-    async fetchPumpSwapPrice(tokenAddress) {
+    // -------------------- BUY --------------------
+    async executePumpSwap({ decryptedKey, tokenOut, amountIn, slippageBps }) {
         try {
-            const response = await axios.get(`https://api.pumpswap.io/v1/price/${tokenAddress}`);
-            return response.data?.price || 0;
+            const secretKey = bs58.decode(decryptedKey);
+            const payer = Keypair.fromSecretKey(secretKey);
+
+            const mint = new PublicKey(tokenOut);
+            const global = await this.sdk.fetchGlobal();
+            const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
+                await this.sdk.fetchBuyState(mint, payer.publicKey);
+
+            const solAmount = BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL));
+            const tokenAmount = this.sdk.getBuyTokenAmountFromSolAmount(global, bondingCurve, solAmount);
+
+            const instructions = await this.sdk.buyInstructions({
+                global,
+                bondingCurveAccountInfo,
+                bondingCurve,
+                associatedUserAccountInfo,
+                mint,
+                user: payer.publicKey,
+                solAmount,
+                amount: tokenAmount,
+                slippage: slippageBps
+            });
+
+            const tx = new Transaction().add(...instructions);
+            const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
+
+            this.log("✅ PumpFun BUY executed:", { signature });
+
+            return { signature, inputAmount: solAmount.toString(), outputAmount: tokenAmount.toString() };
         } catch (error) {
-            this.log('Error fetching PumpSwap price:', error.message);
-            return 0;
+            throw new Error(`PumpFun buy failed: ${error.message}`);
         }
     }
 
-    async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps }) {
+    // -------------------- SELL --------------------
+    async executePumpSell({ decryptedKey, tokenIn, amountIn, slippageBps }) {
         try {
-            // Decode private key
-            const privateKeyBytes = bs58.decode(decryptedKey);
-            const keypair = {
-                publicKey: new PublicKey(privateKeyBytes.slice(32)),
-                secretKey: privateKeyBytes
-            };
-            // Fetch token decimals
-            const tokenInMetadata = await this.getTokenMetadata(tokenIn);
-            const decimals = tokenInMetadata?.decimals ?? 9;
-            // Convert human-readable amount to raw units
-            const rawAmount = Math.floor(Number(amountIn) * (10 ** decimals));
-            // Log raw amount being sent on-chain
-            this.log("💰 Raw amount for PumpSwap:", { rawAmount });
-            this.log("🚀 PumpSwap execution requested:", { tokenIn, tokenOut, amountIn: rawAmount, slippageBps });
-            // Call PumpSwap API with raw units
-            const response = await axios.post('https://docs-demo.solana-mainnet.quiknode.pro/pump-fun/swap', {
-                wallet: keypair.publicKey.toBase58(),
-                tokenIn,
-                tokenOut,
-                amountIn: rawAmount,
-                slippageBps
+            const secretKey = bs58.decode(decryptedKey);
+            const payer = Keypair.fromSecretKey(secretKey);
+
+            const mint = new PublicKey(tokenIn);
+            const global = await this.sdk.fetchGlobal();
+            const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
+                await this.sdk.fetchSellState(mint, payer.publicKey);
+
+            // Convert token amount to raw units
+            const tokenMetadata = await this.getTokenMetadata(tokenIn);
+            const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
+
+            const solAmount = this.sdk.getSellSolAmountFromTokenAmount(global, bondingCurve, rawAmount);
+
+            const instructions = await this.sdk.sellInstructions({
+                global,
+                bondingCurveAccountInfo,
+                bondingCurve,
+                associatedUserAccountInfo,
+                mint,
+                user: payer.publicKey,
+                amount: rawAmount,
+                solAmount,
+                slippage: slippageBps
             });
-            
-            const result = response.data;
-            if (!result?.txid) throw new Error('PumpSwap execution failed');
-            
-            // Wait for transaction confirmation
-            const confirmation = await this.connection.confirmTransaction(result.txid, 'confirmed');
-            if (confirmation.value.err) throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-            
-            this.log("✅ PumpSwap executed successfully:", { txid: result.txid });
-            
-            return {
-                signature: result.txid,
-                inputAmount: rawAmount,
-                outputAmount: result.outAmount,
-                priceImpact: result.priceImpactPct,
-                gasUsed: result.gasUsed
-            };
+
+            const tx = new Transaction().add(...instructions);
+            const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
+
+            this.log("✅ PumpFun SELL executed:", { signature });
+
+            return { signature, inputAmount: rawAmount.toString(), outputAmount: solAmount.toString() };
         } catch (error) {
-            throw new Error(`PumpSwap execution failed: ${error.message}`);
+            throw new Error(`PumpFun sell failed: ${error.message}`);
         }
     }
 }
