@@ -7,18 +7,15 @@ const {
     sendAndConfirmTransaction,
     Keypair
 } = require('@solana/web3.js');
-const { PumpSdk } = require('@pump-fun/pump-sdk');
+const { PumpAmmSdk, Direction } = require('@pump-fun/pump-swap-sdk');
 const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
 
-// Metaplex Token Metadata Program ID
-const METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-        this.sdk = new PumpSdk(this.connection);
+        this.sdk = new PumpAmmSdk(this.connection);
 
         // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
@@ -152,62 +149,29 @@ class SolanaService {
             // Normalize SOL token
             const wsol = 'So11111111111111111111111111111111111111112';
 
-            if (side === 'buy') {
-                try {
-                    // Try bonding curve first
-                    const mint = new PublicKey(tokenOut);
-                    const global = await this.sdk.fetchGlobal();
-                    const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
-                        await this.sdk.fetchBuyState(mint, payer.publicKey);
+            const pool = await this.sdk.getPool(tokenIn, tokenOut);
+            const global = await this.sdk.getGlobal();
 
-                    const solAmount = BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL));
-                    const tokenAmount = this.sdk.getBuyTokenAmountFromSolAmount(global, bondingCurve, solAmount);
-
-                    const instructions = await this.sdk.buyInstructions({
-                        global,
-                        bondingCurveAccountInfo,
-                        bondingCurve,
-                        associatedUserAccountInfo,
-                        mint,
-                        user: payer.publicKey,
-                        solAmount,
-                        amount: tokenAmount,
-                        slippage: slippageBps
-                    });
-
-                    const tx = new Transaction().add(...instructions);
-                    const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
-
-                    this.log('✅ PumpFun bonding curve BUY executed:', { signature });
-                    return { signature, inputAmount: solAmount.toString(), outputAmount: tokenAmount.toString() };
-                } catch (bcError) {
-                    this.log(`⚠️ Bonding curve not found for ${tokenOut}, falling back to PumpSwap`, bcError.message);
-                }
-            }
-
-            // PumpSwap fallback
-            const mint = new PublicKey(side === 'buy' ? tokenOut : tokenIn);
-            const global = await this.sdk.fetchGlobal();
             let instructions, inputAmount, outputAmount;
 
             if (side === 'buy') {
-                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapBuyInstructions({
-                    global,
-                    mint,
-                    user: payer.publicKey,
-                    solAmount: BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL)),
-                    slippage: slippageBps
-                }));
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
+                    pool,
+                    amountIn,
+                    Direction.QuoteToBase,
+                    slippageBps,
+                    payer.publicKey
+                ));
             } else {
                 const tokenMetadata = await this.getTokenMetadata(tokenIn);
                 const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
-                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapSellInstructions({
-                    global,
-                    mint,
-                    user: payer.publicKey,
-                    tokenAmount: rawAmount,
-                    slippage: slippageBps
-                }));
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
+                    pool,
+                    rawAmount,
+                    Direction.BaseToQuote,
+                    slippageBps,
+                    payer.publicKey
+                ));
             }
 
             const tx = new Transaction().add(...instructions);
