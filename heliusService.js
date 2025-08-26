@@ -148,6 +148,7 @@ class HeliusService {
             const accountData = transaction.accountData || [];
             const instructions = transaction.instructions || [];
             
+            // Initialize swap details
             const swapDetails = {
                 signature: transaction.signature,
                 slot: transaction.slot,
@@ -173,8 +174,9 @@ class HeliusService {
                     tokenOut: null,
                     amountIn: 0,
                     amountOut: 0,
-                    side: null
-                }
+                    side: null,
+                    poolPDA: null // NEW: dynamically extracted pool PDA
+                    }
             };
             
             // derive alphaWallet's tokenIn/tokenOut
@@ -185,22 +187,35 @@ class HeliusService {
                     swapDetails.perspective.tokenIn = t.mint;
                     swapDetails.perspective.amountIn += normalizedAmount;
                 }
+                
                 if (t.toUserAccount === alphaWallet) {
                     swapDetails.perspective.tokenOut = t.mint;
                     swapDetails.perspective.amountOut += normalizedAmount;
+                    
+                    // Set pool PDA as the account sending tokens to alpha wallet
+                    swapDetails.perspective.poolPDA = t.fromUserAccount;
                 }
             });
             
-            // handle SOL (if not already included)
+            // handle SOL (native transfers / nativeBalanceChange
             const nativeChange = accountData.find(a => a.account === alphaWallet)?.nativeBalanceChange || 0;
             if (nativeChange < 0) {
                 swapDetails.perspective.tokenIn = 'SOL';
-                swapDetails.perspective.amountIn += Math.abs(nativeChange) / 1e9;
+                swapDetails.perspective.amountIn += Math.abs(nativeChange);
+                
+                // Pool PDA = where SOL went
+                const solTransfer = nativeTransfers.find(n => n.fromUserAccount === alphaWallet && n.toUserAccount !== alphaWallet);
+                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.toUserAccount;
             } else if (nativeChange > 0) {
                 swapDetails.perspective.tokenOut = 'SOL';
-                swapDetails.perspective.amountOut += nativeChange / 1e9;
+                swapDetails.perspective.amountOut += nativeChange;
+                
+                // Pool PDA = who sent the SOL
+                const solTransfer = nativeTransfers.find(n => n.toUserAccount === alphaWallet && n.fromUserAccount !== alphaWallet);
+                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.fromUserAccount;
             }
-            // side
+            
+            // Determine swap side
             const { tokenIn, tokenOut, amountIn, amountOut } = swapDetails.perspective;
             if (tokenIn === 'SOL' && tokenOut !== 'SOL') {
                 swapDetails.perspective.side = 'buy';
