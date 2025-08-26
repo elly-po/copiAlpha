@@ -260,9 +260,9 @@ class TradingEngine {
             // Get token info with caching
             const tokenInfo = await this.getTokenInfo(side === 'buy' ? tokenOut : tokenIn);
 
-            // === AXIOM-SPECIFIC SWAP ===
+            // === PUMPSWAP-SPECIFIC SWAP ===
             const decryptedKey = this.decryptPrivateKey(user.private_key);
-            
+
             this.logWithTimestamp("PumpSwap params:", {
                 tokenIn,
                 tokenOut,
@@ -376,10 +376,10 @@ class TradingEngine {
         return 0.5; // Default 50% scaling for existing positions
     }
 
-    // === AXIOM HELPERS WITH RETRY LOGIC ===
+    // === PUMPSWAP HELPERS WITH RETRY LOGIC ===
     async executePumpSwapWithRetry(decryptedKey, swapParams, maxRetries = 3) {
         let lastError;
-        
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const exec = await this.solanaService.executePumpSwap({
@@ -389,7 +389,7 @@ class TradingEngine {
                     amountIn: swapParams.amountIn,
                     slippageBps: swapParams.slippageBps
                 });
-                
+
                 if (exec?.signature) {
                     this.logWithTimestamp(`✅ PumpSwap successful on attempt ${attempt}`);
                     return exec;
@@ -731,7 +731,7 @@ class TradingEngine {
 
             const wsol = 'So11111111111111111111111111111111111111112';
             const decryptedKey = this.decryptPrivateKey(user.private_key);
-            const exec = await this.executeAxiomSwapWithRetry(
+            const exec = await this.executePumpSwapWithRetry(
                 decryptedKey,
                 {
                     tokenIn: position.tokenAddress,
