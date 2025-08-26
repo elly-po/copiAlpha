@@ -120,7 +120,7 @@ class TradingEngine {
                     tokenOut: swapDetails?.perspective?.tokenOut,
                     amountIn: swapDetails?.perspective?.amountIn,
                     amountOut: swapDetails?.perspective?.amountOut,
-                    pair: swapDetails?.perspective?.poolPDA
+                    //pair: swapDetails?.perspective?.poolPDA
                 })
             );
 
@@ -217,7 +217,7 @@ class TradingEngine {
     async executeCopyTrade(user, swapDetails, alphaWallet) {
         try {
             const p = swapDetails.perspective || {};
-            const { side, tokenIn, tokenOut, amountIn, amountOut, poolPDA } = p;
+            const { side, tokenIn, tokenOut, amountIn, amountOut, /*poolPDA*/} = p;
 
             this.logWithTimestamp('Executing copy trade for user', user.telegram_id, {
                 side, tokenIn: tokenIn?.slice(0, 8), tokenOut: tokenOut?.slice(0, 8), 
@@ -269,7 +269,7 @@ class TradingEngine {
                 tokenOut,
                 amountIn: userTradeAmount,
                 slippageBps: Math.floor((user.slippage || 3) * 100),
-                poolPDA
+                //poolPDA
             });
 
             const exec = await this.executePumpSwapWithRetry(
@@ -279,7 +279,7 @@ class TradingEngine {
                     tokenOut,
                     amountIn: userTradeAmount,
                     slippageBps: Math.floor((user.slippage || 3) * 100),
-                    poolPDA
+                   // poolPDA
                 },
                 3
             );
@@ -391,7 +391,7 @@ class TradingEngine {
                     tokenOut: swapParams.tokenOut,
                     amountIn: swapParams.amountIn,
                     slippageBps: swapParams.slippageBps,
-                    poolPDA: swapParams.poolPDA
+                    //poolPDA: swapParams.poolPDA
                 });
 
                 if (exec?.signature) {
