@@ -140,7 +140,7 @@ class SolanaService {
         }
     }
 
-    // -------------------- UNIFIED SWAP --------------------
+    // -------------------- SWAP --------------------
     async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, poolPDA, side = 'buy' }) {
         try {
             const secretKey = bs58.decode(decryptedKey);
@@ -149,9 +149,8 @@ class SolanaService {
             // Normalize SOL token
             const wsol = 'So11111111111111111111111111111111111111112';
 
-            // 1. Get pool state (replaces getPool)
             const { globalConfig, pool } = await this.sdk.swapSolanaState(
-                new PublicKey(poolPDA),   // ⚠️ may need to try tokenIn depending on SDK expectations
+                new PublicKey(poolPDA),
                 payer.publicKey
             );
 
