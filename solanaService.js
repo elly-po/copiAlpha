@@ -7,23 +7,23 @@ const {
     sendAndConfirmTransaction,
     Keypair
 } = require('@solana/web3.js');
-const { PumpAmmSdk, Direction } = require('@pump-fun/pump-swap-sdk');
+const { PumpAmmInternalSdk, Direction } = require('@pump-fun/pump-swap-internal-sdk'); // internal SDK
 const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
 
+const PUMP_AMM_PROGRAM_ID = new PublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
+
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-        this.sdk = new PumpAmmSdk(this.connection);
+        this.sdk = new PumpAmmInternalSdk(this.connection, PUMP_AMM_PROGRAM_ID);
 
-        // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
             maxConcurrent: 5,
             minTime: 200
         });
 
-        // In-memory caches
         this.tokenMetadataCache = new Map();
         this.priceCache = new Map();
         this.cacheConfig = {
@@ -36,7 +36,6 @@ class SolanaService {
         console.log(new Date().toISOString(), ...args);
     }
 
-    // -------------------- CACHE HELPERS --------------------
     setCacheWithExpiry(cache, key, value, expiry) {
         cache.set(key, { value, expiry: Date.now() + expiry });
     }
@@ -51,7 +50,6 @@ class SolanaService {
         return cached.value;
     }
 
-    // -------------------- WALLET HELPERS --------------------
     async validateWallet(publicKeyStr) {
         try {
             const publicKey = new PublicKey(publicKeyStr);
@@ -77,7 +75,6 @@ class SolanaService {
         }
     }
 
-    // -------------------- TOKEN METADATA --------------------
     async getTokenMetadata(mintAddress) {
         try {
             if (mintAddress === "SOL" || mintAddress === "So11111111111111111111111111111111111111112") {
@@ -115,7 +112,6 @@ class SolanaService {
         }
     }
 
-    // -------------------- PRICE --------------------
     async getIndicativePriceUSD(tokenAddress) {
         try {
             const cached = this.getCacheValue(this.priceCache, tokenAddress);
@@ -129,8 +125,6 @@ class SolanaService {
                 } catch {
                     price = 0;
                 }
-            } else {
-                price = 0; // placeholder, could fetch from pump.fun price API
             }
 
             if (price > 0) this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
@@ -140,27 +134,20 @@ class SolanaService {
         }
     }
 
-    // -------------------- UNIFIED SWAP --------------------
     async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, side = 'buy' }) {
         try {
             const secretKey = bs58.decode(decryptedKey);
             const payer = Keypair.fromSecretKey(secretKey);
 
-            // Normalize SOL token
-            const wsol = 'So11111111111111111111111111111111111111112';
-
-            // 1. Get pool state (replaces getPool)
-            const { globalConfig, pool } = await this.sdk.swapSolanaState(
-                new PublicKey(tokenOut),   // ⚠️ may need to try tokenIn depending on SDK expectations
-                payer.publicKey
-            );
+            // fetch pool PDA for tokenIn/tokenOut
+            const poolAccount = await this.sdk.findPool(tokenIn, tokenOut);
+            if (!poolAccount) throw new Error("Pool account not found");
 
             let instructions, inputAmount, outputAmount;
 
-            // 2. Build swap instructions
             if (side === 'buy') {
-                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
-                    pool,
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swap(
+                    poolAccount,
                     amountIn,
                     Direction.QuoteToBase,
                     slippageBps,
@@ -169,9 +156,8 @@ class SolanaService {
             } else {
                 const tokenMetadata = await this.getTokenMetadata(tokenIn);
                 const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
-
-                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
-                    pool,
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swap(
+                    poolAccount,
                     rawAmount,
                     Direction.BaseToQuote,
                     slippageBps,
@@ -179,7 +165,6 @@ class SolanaService {
                 ));
             }
 
-            // 3. Send transaction
             const tx = new Transaction().add(...instructions);
             const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
 
