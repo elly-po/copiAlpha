@@ -217,7 +217,7 @@ class TradingEngine {
     async executeCopyTrade(user, swapDetails, alphaWallet) {
         try {
             const p = swapDetails.perspective || {};
-            const { side, tokenIn, tokenOut, amountIn, amountOut } = p;
+            const { side, tokenIn, tokenOut, amountIn, amountOut, poolPDA } = p;
 
             this.logWithTimestamp('Executing copy trade for user', user.telegram_id, {
                 side, tokenIn: tokenIn?.slice(0, 8), tokenOut: tokenOut?.slice(0, 8), 
@@ -268,7 +268,8 @@ class TradingEngine {
                 tokenIn,
                 tokenOut,
                 amountIn: userTradeAmount,
-                slippageBps: Math.floor((user.slippage || 3) * 100)
+                slippageBps: Math.floor((user.slippage || 3) * 100),
+                poolPDA
             });
 
             const exec = await this.executePumpSwapWithRetry(
@@ -277,7 +278,8 @@ class TradingEngine {
                     tokenIn,
                     tokenOut,
                     amountIn: userTradeAmount,
-                    slippageBps: Math.floor((user.slippage || 3) * 100)
+                    slippageBps: Math.floor((user.slippage || 3) * 100),
+                    poolPDA
                 },
                 3
             );
@@ -388,7 +390,8 @@ class TradingEngine {
                     tokenIn: swapParams.tokenIn,
                     tokenOut: swapParams.tokenOut,
                     amountIn: swapParams.amountIn,
-                    slippageBps: swapParams.slippageBps
+                    slippageBps: swapParams.slippageBps,
+                    poolPDA: swapParams.poolPDA
                 });
 
                 if (exec?.signature) {
