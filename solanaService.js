@@ -150,6 +150,8 @@ class SolanaService {
             const wsol = 'So11111111111111111111111111111111111111112';
             if (tokenIn === 'SOL') tokenIn = wsol;
             if (tokenOut === 'SOL') tokenOut = wsol;
+
+            console.log('🔹 Tokens for swap:', { tokenIn, tokenOut });
             
             // 1. Get pool state (SDK derives the pool PDA automatically)
             const { globalConfig, pool } = await this.sdk.swapSolanaState(
