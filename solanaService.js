@@ -154,8 +154,10 @@ class SolanaService {
             // 1. Get pool state (SDK derives the pool PDA automatically)
             const { globalConfig, pool } = await this.sdk.swapSolanaState(
                 new PublicKey(tokenIn),
-                new PublicKey(tokenOut)
+                new PublicKey(tokenOut),
+                payer.publicKey
             );
+            console.log('🔹 Pool info returned by SDK:', pool);
 
             let instructions, inputAmount, outputAmount;
 
