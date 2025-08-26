@@ -143,80 +143,81 @@ class SolanaService {
         }
     }
 
-    // -------------------- BUY --------------------
-    async executePumpSwap({ decryptedKey, tokenOut, amountIn, slippageBps }) {
+    // -------------------- UNIFIED SWAP --------------------
+    async executeSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, side = 'buy' }) {
         try {
             const secretKey = bs58.decode(decryptedKey);
             const payer = Keypair.fromSecretKey(secretKey);
 
-            const mint = new PublicKey(tokenOut);
+            // Normalize SOL token
+            const wsol = 'So11111111111111111111111111111111111111112';
+
+            if (side === 'buy') {
+                try {
+                    // Try bonding curve first
+                    const mint = new PublicKey(tokenOut);
+                    const global = await this.sdk.fetchGlobal();
+                    const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
+                        await this.sdk.fetchBuyState(mint, payer.publicKey);
+
+                    const solAmount = BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL));
+                    const tokenAmount = this.sdk.getBuyTokenAmountFromSolAmount(global, bondingCurve, solAmount);
+
+                    const instructions = await this.sdk.buyInstructions({
+                        global,
+                        bondingCurveAccountInfo,
+                        bondingCurve,
+                        associatedUserAccountInfo,
+                        mint,
+                        user: payer.publicKey,
+                        solAmount,
+                        amount: tokenAmount,
+                        slippage: slippageBps
+                    });
+
+                    const tx = new Transaction().add(...instructions);
+                    const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
+
+                    this.log('✅ PumpFun bonding curve BUY executed:', { signature });
+                    return { signature, inputAmount: solAmount.toString(), outputAmount: tokenAmount.toString() };
+                } catch (bcError) {
+                    this.log(`⚠️ Bonding curve not found for ${tokenOut}, falling back to PumpSwap`, bcError.message);
+                }
+            }
+
+            // PumpSwap fallback
+            const mint = new PublicKey(side === 'buy' ? tokenOut : tokenIn);
             const global = await this.sdk.fetchGlobal();
-            const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
-                await this.sdk.fetchBuyState(mint, payer.publicKey);
+            let instructions, inputAmount, outputAmount;
 
-            const solAmount = BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL));
-            const tokenAmount = this.sdk.getBuyTokenAmountFromSolAmount(global, bondingCurve, solAmount);
-
-            const instructions = await this.sdk.buyInstructions({
-                global,
-                bondingCurveAccountInfo,
-                bondingCurve,
-                associatedUserAccountInfo,
-                mint,
-                user: payer.publicKey,
-                solAmount,
-                amount: tokenAmount,
-                slippage: slippageBps
-            });
+            if (side === 'buy') {
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapBuyInstructions({
+                    global,
+                    mint,
+                    user: payer.publicKey,
+                    solAmount: BigInt(Math.floor(Number(amountIn) * LAMPORTS_PER_SOL)),
+                    slippage: slippageBps
+                }));
+            } else {
+                const tokenMetadata = await this.getTokenMetadata(tokenIn);
+                const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
+                ({ instructions, inputAmount, outputAmount } = await this.sdk.swapSellInstructions({
+                    global,
+                    mint,
+                    user: payer.publicKey,
+                    tokenAmount: rawAmount,
+                    slippage: slippageBps
+                }));
+            }
 
             const tx = new Transaction().add(...instructions);
             const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
 
-            this.log("✅ PumpFun BUY executed:", { signature });
+            this.log(`✅ PumpSwap ${side.toUpperCase()} executed:`, { signature });
+            return { signature, inputAmount: inputAmount.toString(), outputAmount: outputAmount.toString() };
 
-            return { signature, inputAmount: solAmount.toString(), outputAmount: tokenAmount.toString() };
         } catch (error) {
-            throw new Error(`PumpFun buy failed: ${error.message}`);
-        }
-    }
-
-    // -------------------- SELL --------------------
-    async executePumpSell({ decryptedKey, tokenIn, amountIn, slippageBps }) {
-        try {
-            const secretKey = bs58.decode(decryptedKey);
-            const payer = Keypair.fromSecretKey(secretKey);
-
-            const mint = new PublicKey(tokenIn);
-            const global = await this.sdk.fetchGlobal();
-            const { bondingCurveAccountInfo, bondingCurve, associatedUserAccountInfo } =
-                await this.sdk.fetchSellState(mint, payer.publicKey);
-
-            // Convert token amount to raw units
-            const tokenMetadata = await this.getTokenMetadata(tokenIn);
-            const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
-
-            const solAmount = this.sdk.getSellSolAmountFromTokenAmount(global, bondingCurve, rawAmount);
-
-            const instructions = await this.sdk.sellInstructions({
-                global,
-                bondingCurveAccountInfo,
-                bondingCurve,
-                associatedUserAccountInfo,
-                mint,
-                user: payer.publicKey,
-                amount: rawAmount,
-                solAmount,
-                slippage: slippageBps
-            });
-
-            const tx = new Transaction().add(...instructions);
-            const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
-
-            this.log("✅ PumpFun SELL executed:", { signature });
-
-            return { signature, inputAmount: rawAmount.toString(), outputAmount: solAmount.toString() };
-        } catch (error) {
-            throw new Error(`PumpFun sell failed: ${error.message}`);
+            throw new Error(`Swap ${side} failed: ${error.message}`);
         }
     }
 }
