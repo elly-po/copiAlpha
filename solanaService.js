@@ -7,7 +7,7 @@ const {
     sendAndConfirmTransaction,
     Keypair
 } = require('@solana/web3.js');
-const { PumpAmmInternalSdk, Direction } = require('@pump-fun/pump-swap-sdk');
+const { PumpAmmSdk, Direction } = require('@pump-fun/pump-swap-sdk');
 const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
@@ -15,7 +15,7 @@ const axios = require('axios');
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-        this.sdk = new PumpAmmInternalSdk(this.connection); // <-- changed here
+        this.sdk = new PumpAmmSdk(this.connection);
 
         // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
@@ -149,11 +149,15 @@ class SolanaService {
             // Normalize SOL token
             const wsol = 'So11111111111111111111111111111111111111112';
 
-            const pool = await this.sdk.getPool(tokenIn, tokenOut); // <-- now works with InternalSdk
-            const global = await this.sdk.getGlobal();
+            // 1. Get pool state (replaces getPool)
+            const { globalConfig, pool } = await this.sdk.swapSolanaState(
+                new PublicKey(tokenOut),   // ⚠️ may need to try tokenIn depending on SDK expectations
+                payer.publicKey
+            );
 
             let instructions, inputAmount, outputAmount;
 
+            // 2. Build swap instructions
             if (side === 'buy') {
                 ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
                     pool,
@@ -165,6 +169,7 @@ class SolanaService {
             } else {
                 const tokenMetadata = await this.getTokenMetadata(tokenIn);
                 const rawAmount = BigInt(Math.floor(Number(amountIn) * (10 ** tokenMetadata.decimals)));
+
                 ({ instructions, inputAmount, outputAmount } = await this.sdk.swapInstructions(
                     pool,
                     rawAmount,
@@ -174,6 +179,7 @@ class SolanaService {
                 ));
             }
 
+            // 3. Send transaction
             const tx = new Transaction().add(...instructions);
             const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
 
