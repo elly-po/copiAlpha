@@ -206,14 +206,14 @@ class HeliusService {
                 
                 // Pool PDA = where SOL went
                 const solTransfer = nativeTransfers.find(n => n.fromUserAccount === alphaWallet && n.toUserAccount !== alphaWallet);
-                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.toUserAccount;
+                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.toTokenAccount;
             } else if (nativeChange > 0) {
                 swapDetails.perspective.tokenOut = 'SOL';
                 swapDetails.perspective.amountOut += nativeChange;
                 
                 // Pool PDA = who sent the SOL
                 const solTransfer = nativeTransfers.find(n => n.toUserAccount === alphaWallet && n.fromUserAccount !== alphaWallet);
-                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.fromUserAccount;
+                if (solTransfer) swapDetails.perspective.poolPDA = solTransfer.fromTokenAccount;
             }
             
             // Determine swap side
