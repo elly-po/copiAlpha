@@ -144,7 +144,7 @@ class SolanaService {
     }
 
     // -------------------- UNIFIED SWAP --------------------
-    async executeSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, side = 'buy' }) {
+    async executePumpSwap({ decryptedKey, tokenIn, tokenOut, amountIn, slippageBps, side = 'buy' }) {
         try {
             const secretKey = bs58.decode(decryptedKey);
             const payer = Keypair.fromSecretKey(secretKey);
