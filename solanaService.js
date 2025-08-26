@@ -7,7 +7,7 @@ const {
     sendAndConfirmTransaction,
     Keypair
 } = require('@solana/web3.js');
-const { PumpAmmSdk, Direction } = require('@pump-fun/pump-swap-sdk');
+const { PumpAmmInternalSdk, Direction } = require('@pump-fun/pump-swap-sdk');
 const bs58 = require('bs58');
 const Bottleneck = require('bottleneck');
 const axios = require('axios');
@@ -15,7 +15,7 @@ const axios = require('axios');
 class SolanaService {
     constructor() {
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-        this.sdk = new PumpAmmSdk(this.connection);
+        this.sdk = new PumpAmmInternalSdk(this.connection); // <-- changed here
 
         // Rate limiter for RPC calls
         this.limiter = new Bottleneck({
@@ -149,7 +149,7 @@ class SolanaService {
             // Normalize SOL token
             const wsol = 'So11111111111111111111111111111111111111112';
 
-            const pool = await this.sdk.getPool(tokenIn, tokenOut);
+            const pool = await this.sdk.getPool(tokenIn, tokenOut); // <-- now works with InternalSdk
             const global = await this.sdk.getGlobal();
 
             let instructions, inputAmount, outputAmount;
