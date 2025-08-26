@@ -186,7 +186,7 @@ class HeliusService {
                 if (t.fromUserAccount === alphaWallet) {
                     swapDetails.perspective.tokenIn = t.mint;
                     swapDetails.perspective.amountIn += normalizedAmount;
-                    swapDetails.perspective.poolPDA = t.toUserAccount;
+                    swapDetails.perspective.poolPDA = t.toTokenAccount;
                 }
                 
                 if (t.toUserAccount === alphaWallet) {
@@ -194,7 +194,7 @@ class HeliusService {
                     swapDetails.perspective.amountOut += normalizedAmount;
                     
                     // Set pool PDA as the account sending tokens to alpha wallet
-                    swapDetails.perspective.poolPDA = t.fromUserAccount;
+                    swapDetails.perspective.poolPDA = t.fromTokenAccount;
                 }
             });
             
