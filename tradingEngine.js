@@ -119,7 +119,8 @@ class TradingEngine {
                     tokenIn: swapDetails?.perspective?.tokenIn,
                     tokenOut: swapDetails?.perspective?.tokenOut,
                     amountIn: swapDetails?.perspective?.amountIn,
-                    amountOut: swapDetails?.perspective?.amountOut
+                    amountOut: swapDetails?.perspective?.amountOut,
+                    pair: swapDetails?.perspective?.poolPDA
                 })
             );
 
