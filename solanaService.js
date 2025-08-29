@@ -8,7 +8,7 @@ const {
   Keypair,
   SystemProgram,
 } = require('@solana/web3.js');
-// SDK removed: const { PumpAmmSdk, Direction } = require('@pump-fun/pump-swap-sdk');
+
 const {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
@@ -21,7 +21,6 @@ const axios = require('axios');
 class SolanaService {
   constructor() {
     this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-    // SDK removed: this.sdk = new PumpAmmSdk(this.connection);
 
     // Rate limiter for RPC calls
     this.limiter = new Bottleneck({
@@ -40,7 +39,6 @@ class SolanaService {
     // ---- Pump.fun program + known accounts ----
     this.PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
 
-    // These two come from the snippet you shared (video style):
     // - Global fee vault (writable)
     this.GLOBAL_FEE_VAULT = new PublicKey('CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM');
     // - Some read-only config/authority account used by the program
@@ -218,14 +216,7 @@ class SolanaService {
   }
 
   // -------------------- SWAP (RAW PUMP.FUN BUY) --------------------
-  /**
-   * Execute a raw Pump.fun buy (SOL -> token) on the bonding curve.
-   * @param {Object} params
-   * @param {string} params.decryptedKey - base58 secret key (ed25519)
-   * @param {string} params.tokenOut - mint address of the token to buy (e.g. ...pump)
-   * @param {number} params.amountIn - SOL amount (in SOL, not lamports)
-   * @param {string} [params.side='buy'] - currently only 'buy' supported in this raw path
-   */
+  
   async executePumpSwap({ decryptedKey, tokenIn = 'SOL', tokenOut, amountIn, slippageBps, side = 'buy' }) {
     if (side !== 'buy') {
       throw new Error('Only BUY is implemented in raw Pump.fun mode. (Sell path not included here.)');
