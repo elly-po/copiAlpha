@@ -221,7 +221,15 @@ class SolanaService {
     if (side !== 'buy') {
       throw new Error('Only BUY is implemented in raw Pump.fun mode. (Sell path not included here.)');
     }
+    const wsol = 'So11111111111111111111111111111111111111112';
+    if (tokenIn === 'SOL') tokenIn = wsol;
+    if (tokenOut === 'SOL') tokenOut = wsol;
 
+    console.log("🔹 Tokens for swap:", { tokenIn, tokenOut });
+    console.log("Are valid PubKeys?",
+      PublicKey.isOnCurve(tokenIn), 
+      PublicKey.isOnCurve(tokenOut)
+    );
     try {
       const secretKey = bs58.decode(decryptedKey);
       const payer = Keypair.fromSecretKey(secretKey);
