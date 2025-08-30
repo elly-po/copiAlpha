@@ -48,6 +48,7 @@ class SolanaService {
     // Discriminators (method selectors) from snippet
     this.BUY_DISCRIM_HEX = '66063d1201daebea'; // 8 bytes
     // NOTE: Sell path not implemented here (need correct discriminator & accounts layout).
+    this.SELL_DISCRIM_HEX = '33e685a4017f83adc0319594b41100000000000000000000';
   }
 
   log(...args) {
