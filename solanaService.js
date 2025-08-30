@@ -235,4 +235,33 @@ class SolanaService {
         { pubkey: payer.publicKey, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: new
+        { pubkey: new PublicKey("SysvarRent11111111111111111111111111111111"), isSigner: false, isWritable: false },
+        { pubkey: this.CONFIG_AUTHORITY, isSigner: false, isWritable: false },
+        { pubkey: this.PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
+      ];
+
+      const buyIx = { keys, programId: this.PUMP_PROGRAM_ID, data };
+
+      const tx = new Transaction({ recentBlockhash: blockhash, feePayer: payer.publicKey });
+      if (createUserAtaIx) tx.add(createUserAtaIx);
+      tx.add(buyIx);
+
+      // Optional: simulate before sending
+      try {
+        const simResult = await this.connection.simulateTransaction(tx);
+        this.log('Simulation result:', simResult.value);
+      } catch (simErr) {
+        this.log('Simulation failed (continuing to send):', simErr.message || simErr);
+      }
+
+      const signature = await sendAndConfirmTransaction(this.connection, tx, [payer], { commitment: 'confirmed' });
+      this.log('✅ PumpFun BUY executed', { signature });
+      return { signature };
+    } catch (err) {
+      this.log('❌ PumpFun BUY failed:', err?.message || err);
+      throw new Error(`Swap buy failed: ${err?.message || err}`);
+    }
+  }
+}
+
+module.exports = SolanaService;
