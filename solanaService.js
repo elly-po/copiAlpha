@@ -1,54 +1,81 @@
 // solanaService.js
-const {
-  Connection,
-  PublicKey,
-  LAMPORTS_PER_SOL,
-  Transaction,
-  sendAndConfirmTransaction,
-  Keypair,
-  SystemProgram,
-} = require('@solana/web3.js');
+// ESM / v2-style refactor of your original SolanaService
+// - Uses modular solana/web3.js + solana-program/web3.js APIs
+// - Keeps helper functions (cache, validateWallet, balance, token metadata, price)
+// - Implements Pump.fun BUY using createTransactionMessage pattern
 
-const {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountInstruction,
-  TOKEN_PROGRAM_ID,
-} = require('@solana/spl-token');
-const bs58 = require('bs58');
-const Bottleneck = require('bottleneck');
-const axios = require('axios');
+import fs from "fs";
+import path from "path";
+import bs58 from "bs58";
+import Bottleneck from "bottleneck";
+import axios from "axios";
 
-class SolanaService {
-  constructor() {
-    this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
+//
+// v2 modular web3 imports
+//
+import {
+  address,
+  createSolanaRpc,
+  createRpcSubscriptions,
+  createKeyPairSignerFromBytes,
+  getAddressEncoder,
+  createTransactionMessage,
+  appendTransactionMessageInstruction,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+  getBase64EncodedWireTransaction,
+  sendAndConfirmTransactionFactory,
+} from "solana/web3.js";
 
-    // Rate limiter for RPC calls
-    this.limiter = new Bottleneck({
-      maxConcurrent: 5,
-      minTime: 200,
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenInstruction,
+  getProgramDerivedAddress,
+  TOKEN_PROGRAM_ADDRESS,
+  getAssociatedTokenAddress as splGetAssociatedTokenAddress,
+} from "solana-program/web3.js";
+
+//
+// NOTE: Depending on which v2 packages you actually have, names may differ slightly.
+// The above names match the style used in your snippet. If your installed package
+// exports slightly different helpers, adapt the imports accordingly.
+//
+
+export default class SolanaService {
+  constructor(opts = {}) {
+    // config
+    this.rpcUrl = process.env.SOLANA_RPC_URL || opts.rpcUrl || "https://api.mainnet-beta.solana.com";
+    this.rpcWss = process.env.SOLANA_RPC_WSS || opts.rpcWss || "wss://api.mainnet-beta.solana.com";
+
+    // create rpc clients (v2 style)
+    this.rpc = createSolanaRpc(this.rpcUrl);
+    this.rpcSubscriptions = createRpcSubscriptions(this.rpcWss);
+
+    // convenience wrapper for send+confirm
+    this.sendAndConfirmTransaction = sendAndConfirmTransactionFactory({
+      rpc: this.rpc,
+      rpcSubscriptions: this.rpcSubscriptions,
     });
 
-    // In-memory caches
+    // rate limiter for outgoing HTTP/RPC requests (metadata & price fetching)
+    this.limiter = new Bottleneck({ maxConcurrent: 5, minTime: 200 });
+
+    // caches
     this.tokenMetadataCache = new Map();
     this.priceCache = new Map();
     this.cacheConfig = {
-      tokenMetadata: 5 * 60 * 1000,
-      price: 30 * 1000,
+      tokenMetadata: 5 * 60 * 1000, // 5m
+      price: 30 * 1000, // 30s
     };
 
-    // ---- Pump.fun program + known accounts ----
-    this.PUMP_PROGRAM_ID = new PublicKey('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P');
+    // Pump.fun program + accounts (v2 address wrappers)
+    this.PUMP_PROGRAM_ID = address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+    this.GLOBAL_FEE_VAULT = address("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM");
+    this.CONFIG_AUTHORITY = address("Ce6TQqeCH9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1");
 
-    // - Global fee vault (writable)
-    this.GLOBAL_FEE_VAULT = new PublicKey('CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM');
-
-    // - Some read-only Event authority account
-    this.CONFIG_AUTHORITY = new PublicKey('Ce6TQqeCH9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1');
-
-    // Discriminators (method selectors) from snippet
-    this.BUY_DISCRIM_HEX = '66063d1201daebea'; // 8 bytes
-    // NOTE: Sell path not implemented here (need correct discriminator & accounts layout).
-    this.SELL_DISCRIM_HEX = '33e685a4017f83adc0319594b41100000000000000000000';
+    // buy discriminator (8 bytes hex)
+    this.BUY_DISCRIM_HEX = "66063d1201daebea";
   }
 
   log(...args) {
@@ -71,78 +98,70 @@ class SolanaService {
   }
 
   // -------------------- WALLET HELPERS --------------------
-  async validateWallet(publicKeyStr) {
+  // Accepts an address string (v2 address()) or a base58 string
+  async validateWallet(pubAddressStr) {
     try {
-      const publicKey = new PublicKey(publicKeyStr);
-      const accountInfo = await this.limiter.schedule(() =>
-        this.connection.getAccountInfo(publicKey)
-      );
-      return accountInfo !== null;
-    } catch {
+      const pubAddress = typeof pubAddressStr === "string" ? address(pubAddressStr) : pubAddressStr;
+      const resp = await this.rpc.getAccountInfo({ address: pubAddress }).send();
+      // rpc returns { value: ... } similar to v2 client's pattern
+      return !!(resp?.value);
+    } catch (err) {
+      this.log("validateWallet error:", err?.message || err);
       return false;
     }
   }
 
-  async getWalletBalance(publicKeyStr) {
+  async getWalletBalance(pubAddressStr) {
     try {
-      const publicKey = new PublicKey(publicKeyStr);
-      const balance = await this.limiter.schedule(() =>
-        this.connection.getBalance(publicKey)
-      );
-      return balance / LAMPORTS_PER_SOL;
+      const pubAddress = typeof pubAddressStr === "string" ? address(pubAddressStr) : pubAddressStr;
+      const resp = await this.rpc.getBalance({ address: pubAddress }).send();
+      const lamports = resp?.value ?? 0;
+      return Number(lamports) / 1e9;
     } catch (error) {
-      this.log('Error getting wallet balance:', error);
+      this.log("Error getting wallet balance:", error?.message || error);
       return 0;
     }
   }
 
   // -------------------- TOKEN METADATA --------------------
-  async getTokenMetadata(mintAddress) {
+  // Keep a simple metadata fetch: returns decimals, name placeholder, symbol placeholder
+  async getTokenMetadata(mintAddrStr) {
     try {
-      if (
-        mintAddress === 'SOL' ||
-        mintAddress === 'So11111111111111111111111111111111111111112'
-      ) {
+      // treat native SOL specially
+      if (mintAddrStr === "SOL" || mintAddrStr === "So11111111111111111111111111111111111111112") {
         return {
-          mint: 'So11111111111111111111111111111111111111112',
-          name: 'Solana',
-          symbol: 'SOL',
+          mint: "So11111111111111111111111111111111111111112",
+          name: "Solana",
+          symbol: "SOL",
           decimals: 9,
-          logoURI: 'https://cryptologos.cc/logos/solana-sol-logo.png',
+          logoURI: "https://cryptologos.cc/logos/solana-sol-logo.png",
         };
       }
 
-      const cached = this.getCacheValue(this.tokenMetadataCache, mintAddress);
+      const cached = this.getCacheValue(this.tokenMetadataCache, mintAddrStr);
       if (cached) return cached;
 
-      const mintPubkey = new PublicKey(mintAddress);
-      const mintInfo = await this.limiter.schedule(() =>
-        this.connection.getParsedAccountInfo(mintPubkey)
-      );
+      const mintAddr = address(mintAddrStr);
+      // fetch parsed mint account (v2 rpc)
+      const parsed = await this.rpc.getParsedAccountInfo({ address: mintAddr }).send();
+      const decimals = parsed?.value?.data?.parsed?.info?.decimals ?? 9;
 
-      const decimals =
-        mintInfo?.value?.data?.parsed?.info?.decimals ?? 9;
       const tokenData = {
-        mint: mintAddress,
-        name: 'Unknown Token',
-        symbol: 'UNKNOWN',
+        mint: mintAddrStr,
+        name: "Unknown Token",
+        symbol: "UNKNOWN",
         decimals,
         logoURI: null,
       };
 
-      this.setCacheWithExpiry(
-        this.tokenMetadataCache,
-        mintAddress,
-        tokenData,
-        this.cacheConfig.tokenMetadata
-      );
+      this.setCacheWithExpiry(this.tokenMetadataCache, mintAddrStr, tokenData, this.cacheConfig.tokenMetadata);
       return tokenData;
     } catch (error) {
-      this.log(`⚠️ Metadata fetch failed for ${mintAddress}:`, error.message);
+      this.log(`⚠️ Metadata fetch failed for ${mintAddrStr}:`, error?.message || error);
       return {
-        mint: mintAddress,
-        name: 'Unknown Token',
-        symbol: 'UNKNOWN',
+        mint: mintAddrStr,
+        name: "Unknown Token",
+        symbol: "UNKNOWN",
         decimals: 9,
         logoURI: null,
       };
@@ -156,146 +175,209 @@ class SolanaService {
       if (cached) return cached;
 
       let price = 0;
-      if (
-        tokenAddress === 'SOL' ||
-        tokenAddress === 'So11111111111111111111111111111111111111112'
-      ) {
+      if (tokenAddress === "SOL" || tokenAddress === "So11111111111111111111111111111111111111112") {
         try {
           const response = await axios.get(
-            'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'
+            "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
           );
-          price = response.data.solana?.usd || 0;
-        } catch {
+          price = response.data?.solana?.usd || 0;
+        } catch (e) {
+          this.log("Coingecko fetch failed:", e?.message || e);
           price = 0;
         }
       } else {
-        price = 0; // placeholder for token USD price (pump.fun doesn’t expose simple USD quotes here)
+        // placeholder for non-SOL tokens
+        price = 0;
       }
 
-      if (price > 0)
-        this.setCacheWithExpiry(
-          this.priceCache,
-          tokenAddress,
-          price,
-          this.cacheConfig.price
-        );
+      if (price > 0) {
+        this.setCacheWithExpiry(this.priceCache, tokenAddress, price, this.cacheConfig.price);
+      }
       return price;
-    } catch {
+    } catch (err) {
+      this.log("getIndicativePriceUSD error:", err?.message || err);
       return 0;
     }
   }
 
-  // -------------------- INTERNAL HELPERS (Pump.fun) --------------------
+  // -------------------- INTERNAL HELPERS (Pump.fun PDAs - v2) --------------------
   async _deriveGlobalPda() {
-    const [pda] = await PublicKey.findProgramAddress(
-      [Buffer.from('global')],
-      this.PUMP_PROGRAM_ID
-    );
+    const [pda] = getProgramDerivedAddress({
+      seeds: [Buffer.from("global")],
+      programAddress: this.PUMP_PROGRAM_ID,
+    });
     return pda;
   }
 
-  async _deriveBondingCurvePda(mintPubkey) {
-    const [pda] = await PublicKey.findProgramAddress(
-      [Buffer.from('bonding-curve'), mintPubkey.toBuffer()],
-      this.PUMP_PROGRAM_ID
-    );
+  async _deriveBondingCurvePda(mintAddress) {
+    const m = address(mintAddress);
+    const encoder = getAddressEncoder();
+    const [pda] = getProgramDerivedAddress({
+      seeds: [Buffer.from("bonding-curve"), encoder.encode(m)],
+      programAddress: this.PUMP_PROGRAM_ID,
+    });
     return pda;
   }
 
-  async _getOrCreateATAIx(ownerPubkey, mintPubkey, payerPubkey) {
-    const ata = await getAssociatedTokenAddress(mintPubkey, ownerPubkey, true);
-    const info = await this.connection.getAccountInfo(ata);
-    if (!info) {
-      const ix = createAssociatedTokenAccountInstruction(
-        payerPubkey,     // payer
-        ata,             // ata
-        ownerPubkey,     // owner
-        mintPubkey       // mint
-      );
-      return { ata, ix };
-    }
-    return { ata, ix: null };
+  async _getOrCreateATAIx(ownerAddr, mintAddr, payerAddr) {
+    // ownerAddr, mintAddr, payerAddr are v2 address() objects (or strings)
+    const mint = typeof mintAddr === "string" ? address(mintAddr) : mintAddr;
+    const owner = typeof ownerAddr === "string" ? address(ownerAddr) : ownerAddr;
+    const payer = typeof payerAddr === "string" ? address(payerAddr) : payerAddr;
+
+    const { ata } = findAssociatedTokenPda({
+      mint,
+      owner,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    });
+
+    // findAssociatedTokenPda returns [ata, bump] style in some libs; handle both shapes:
+    const ataAddress = ata ?? ata; // keep shape, if library returns object shape adapt accordingly
+
+    // In v2 helper there is getCreateAssociatedTokenInstruction
+    const ix = getCreateAssociatedTokenInstruction({
+      ata: ataAddress,
+      mint,
+      owner,
+      payer,
+    });
+
+    return { ata: ataAddress, ix };
   }
 
-  // -------------------- SWAP (RAW PUMP.FUN BUY) --------------------
-  
-  async executePumpSwap({ decryptedKey, tokenIn = 'SOL', tokenOut, amountIn, slippageBps, side = 'buy' }) {
-    if (side !== 'buy') {
-      throw new Error('Only BUY is implemented in raw Pump.fun mode. (Sell path not included here.)');
+  // -------------------- SWAP (Pump.fun BUY) --------------------
+  // Accepts: { decryptedKey: bs58(secretKey), tokenIn (optional), tokenOut (mint string), amountIn (SOL number or string) }
+  async executePumpSwap({ decryptedKey, tokenIn = "SOL", tokenOut, amountIn, slippageBps = 100, side = "buy" } = {}) {
+    if (side !== "buy") {
+      throw new Error("Only BUY is implemented in this v2 helper.");
     }
-    const wsol = 'So11111111111111111111111111111111111111112';
-    if (tokenIn === 'SOL') tokenIn = wsol;
-    if (tokenOut === 'SOL') tokenOut = wsol;
 
-    console.log("🔹 Tokens for swap:", { tokenIn, tokenOut });
-    console.log("Are valid PubKeys?",
-      PublicKey.isOnCurve(tokenIn), 
-      PublicKey.isOnCurve(tokenOut)
-    );
     try {
-      const secretKey = bs58.decode(decryptedKey);
-      const payer = Keypair.fromSecretKey(secretKey);
+      // --- signer from bs58 secret (keep your existing workflow)
+      // decryptedKey can be either base58 secretKey string or a Uint8Array/Buffer already
+      let secretBytes;
+      if (typeof decryptedKey === "string") {
+        // treat as base58
+        secretBytes = bs58.decode(decryptedKey);
+      } else if (decryptedKey instanceof Uint8Array || Buffer.isBuffer(decryptedKey)) {
+        secretBytes = decryptedKey;
+      } else {
+        throw new Error("decryptedKey must be a base58 string or Uint8Array/Buffer");
+      }
 
-      const mintPubkey = new PublicKey(tokenOut);
+      const signer = await createKeyPairSignerFromBytes(secretBytes);
+      const signerAddress = signer.address; // v2 signer exposes .address()
 
-      // --- Derive PDAs per the video-snippet style
-      const globalPda = await this._deriveGlobalPda();
-      const bondingCurvePda = await this._deriveBondingCurvePda(mintPubkey);
+      // --- normalize WSOL
+      const wsol = "So11111111111111111111111111111111111111112";
+      if ((tokenIn ?? "").toString().toUpperCase() === "SOL") tokenIn = wsol;
+      if ((tokenOut ?? "").toString().toUpperCase() === "SOL") tokenOut = wsol;
 
-      // --- Associated token accounts
-      const { ata: bondingCurveATA } = await this._getOrCreateATAIx(bondingCurvePda, mintPubkey, payer.publicKey);
-      const { ata: userATA, ix: createUserAtaIx } = await this._getOrCreateATAIx(payer.publicKey, mintPubkey, payer.publicKey);
+      // --- build data buffer (24 bytes: 8 byte discrim + i64 + i64)
+      const amountLamports = BigInt(Math.floor(Number(amountIn) * 1e9)); // assume amountIn is SOL
+      const maxSol = BigInt(-1);
 
-      // --- Build instruction data (8-byte discriminator + 2x i64)
-      // Discriminator: 0x66063d1201daebea
-      const lamportsIn = BigInt(Math.floor(Number(amountIn) * 1e9)); // SOL -> lamports
-      const maxSol = BigInt(-1); // same as snippet
+      const dataBuffer = Buffer.alloc(24);
+      // copy discriminator bytes
+      Buffer.from(this.BUY_DISCRIM_HEX, "hex").copy(dataBuffer, 0);
+      dataBuffer.writeBigInt64LE(amountLamports, 8);
+      dataBuffer.writeBigInt64LE(maxSol, 16);
 
-      const data = Buffer.alloc(24);
-      data.write(this.BUY_DISCRIM_HEX, 'hex');
-      data.writeBigInt64LE(lamportsIn, 8);
-      data.writeBigInt64LE(maxSol, 16);
+      const data = new Uint8Array(dataBuffer);
 
-      // --- Accounts (same order/roles as snippet)
-      const keys = [
-        { pubkey: globalPda, isSigner: false, isWritable: false },
-        { pubkey: this.GLOBAL_FEE_VAULT, isSigner: false, isWritable: true },
-        { pubkey: mintPubkey, isSigner: false, isWritable: false },
-        { pubkey: bondingCurvePda, isSigner: false, isWritable: true },
-        { pubkey: bondingCurveATA, isSigner: false, isWritable: true },
-        { pubkey: userATA, isSigner: false, isWritable: true },
-        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: new PublicKey('SysvarRent11111111111111111111111111111111'), isSigner: false, isWritable: false },
-        { pubkey: this.CONFIG_AUTHORITY, isSigner: false, isWritable: false },
-        { pubkey: this.PUMP_PROGRAM_ID, isSigner: false, isWritable: false },
-      ];
+      // --- PDAs / ATAs
+      const mintAddr = address(tokenOut);
+      const encoder = getAddressEncoder();
 
-      const buyIx = {
-        keys,
-        programId: this.PUMP_PROGRAM_ID,
+      const [globalPda] = getProgramDerivedAddress({
+        seeds: [Buffer.from("global")],
+        programAddress: this.PUMP_PROGRAM_ID,
+      });
+
+      const [bondingCurvePda] = getProgramDerivedAddress({
+        seeds: [Buffer.from("bonding-curve"), encoder.encode(mintAddr)],
+        programAddress: this.PUMP_PROGRAM_ID,
+      });
+
+      const [bondingCurveATA] = findAssociatedTokenPda({
+        mint: mintAddr,
+        owner: bondingCurvePda,
+        tokenProgram: TOKEN_PROGRAM_ADDRESS,
+      });
+
+      const [userATA] = findAssociatedTokenPda({
+        mint: mintAddr,
+        owner: signerAddress,
+        tokenProgram: TOKEN_PROGRAM_ADDRESS,
+      });
+
+      // --- ensure user ATA exists: build create-ata instruction only if necessary via RPC
+      // Use rpc.getAccountInfo to check existence
+      const ataInfoResp = await this.rpc.getAccountInfo({ address: userATA }).send();
+      let createUserAtaIx = null;
+      if (!ataInfoResp?.value) {
+        // Create associated token instruction (v2 helper)
+        createUserAtaIx = getCreateAssociatedTokenInstruction({
+          ata: userATA,
+          mint: mintAddr,
+          owner: signerAddress,
+          payer: signerAddress,
+        });
+      }
+
+      // --- Build Pump.fun instruction (v2 IInstruction shape)
+      const pumpIx = {
+        programAddress: this.PUMP_PROGRAM_ID,
+        accounts: [
+          { address: globalPda, role: "readonly" },
+          { address: this.GLOBAL_FEE_VAULT, role: "writable" },
+          { address: mintAddr, role: "readonly" },
+          { address: bondingCurvePda, role: "writable" },
+          { address: bondingCurveATA, role: "writable" },
+          { address: userATA, role: "writable" },
+          { address: signerAddress, role: "writable-signer" },
+          { address: address("11111111111111111111111111111111"), role: "readonly" }, // system program
+          { address: TOKEN_PROGRAM_ADDRESS, role: "readonly" },
+          { address: address("SysvarRent11111111111111111111111111111111"), role: "readonly" },
+          { address: this.CONFIG_AUTHORITY, role: "readonly" },
+          { address: this.PUMP_PROGRAM_ID, role: "readonly" },
+        ],
         data,
       };
 
-      const tx = new Transaction();
+      // --- latest blockhash
+      const latestBlockhashResp = await this.rpc.getLatestBlockhash().send();
+      const latestBlockhash = latestBlockhashResp?.value?.blockhash ?? latestBlockhashResp?.blockhash;
 
-      // If we need to create the user's ATA, add that first
-      if (createUserAtaIx) tx.add(createUserAtaIx);
+      // --- Build transaction message with ATA create (optional) + pump instruction
+      let txMessage = createTransactionMessage({ version: 0 });
+      txMessage = setTransactionMessageFeePayer(signer, txMessage);
+      txMessage = setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, txMessage);
 
-      // Add the Pump.fun buy instruction
-      tx.add(buyIx);
+      if (createUserAtaIx) txMessage = appendTransactionMessageInstruction(createUserAtaIx, txMessage);
+      txMessage = appendTransactionMessageInstruction(pumpIx, txMessage);
 
-      // Send
-      const signature = await sendAndConfirmTransaction(this.connection, tx, [payer]);
+      // --- Sign and encode
+      const signedTx = await signTransactionMessageWithSigners(txMessage);
+      const encodedTx = await getBase64EncodedWireTransaction(signedTx);
 
-      this.log(`✅ PumpFun BUY executed`, { signature });
+      // --- simulate (optional but useful)
+      try {
+        const sim = await this.rpc.simulateTransaction(encodedTx, { encoding: "base64" }).send();
+        this.log("simulation result:", sim);
+      } catch (simErr) {
+        this.log("simulation error (continuing to send):", simErr?.message || simErr);
+      }
+
+      // --- send & confirm
+      await this.sendAndConfirmTransaction(signedTx, { commitment: "confirmed" });
+
+      const signature = signedTx.signatures?.[signerAddress] ?? null;
+      this.log("✅ PumpFun BUY executed", { signature });
       return { signature };
-    } catch (error) {
-      this.log(`❌ PumpFun BUY failed:`, error?.message || error);
-      throw new Error(`Swap buy failed: ${error?.message || error}`);
+    } catch (err) {
+      this.log("❌ PumpFun BUY failed:", err?.message || err);
+      throw new Error(`Swap buy failed: ${err?.message || err}`);
     }
   }
 }
-
-module.exports = SolanaService;
