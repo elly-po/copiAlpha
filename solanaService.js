@@ -41,7 +41,8 @@ class SolanaService {
 
     // - Global fee vault (writable)
     this.GLOBAL_FEE_VAULT = new PublicKey('CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM');
-    // - Some read-only config/authority account used by the program
+
+    // - Some read-only Event authority account
     this.CONFIG_AUTHORITY = new PublicKey('Ce6TQqeCH9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1');
 
     // Discriminators (method selectors) from snippet
