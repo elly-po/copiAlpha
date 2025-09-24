@@ -33,6 +33,7 @@ class CopyTradingBot {
             await this.telegramBot.init()
             
             const botInstance = this.telegramBot.getBot();
+            botInstance.start();
                     
             console.log("✅ Telegram bot started successfully");
             console.log(`📱 Bot token: @${process.env.BOT_TOKEN?.split(':')[0] || 'Unknown'}`);
