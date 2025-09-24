@@ -800,19 +800,22 @@ class TelegramBot {
             stopLoss: `🛑 Enter stop loss percentage (${this.config.VALIDATION.MIN_STOP_LOSS}-${this.config.VALIDATION.MAX_STOP_LOSS}%):`,
         };
 
-        await ctx.reply(prompts[settingType] || "⚙️ Enter new value:", {
+        const prompMsg = await ctx.reply(prompts[settingType] || "⚙️ Enter new value:", {
             reply_markup: new InlineKeyboard().text("🔙 Back", "settings"),
         });
 
         const response = await conversation.waitFor(["message:text", "callback_query:data"]);
 
         if (response.callbackQuery?.data === "settings") {
+            await this.deleteMessage(ctx, promptMsg.message_id);
             return;
         }
         
         if (response.message?.message_id) {
             await this.deleteMessage(ctx, response.message.message_id);
         }
+
+        await this.deleteMessage(ctx, promptMsg.message_id);
 
         const valueText = this.sanitizeInput(response.message?.text || '');
         const value = parseFloat(valueText);
