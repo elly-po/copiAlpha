@@ -820,8 +820,9 @@ class TelegramBot {
         const backKeyboard = new InlineKeyboard().text("🔙 Back", "settings");
 
         if (isNaN(value) || value <= 0) {
-            await ctx.reply("❌ Please enter a valid positive number.");
-            reply_markup: backKeyboard,
+            await ctx.reply("❌ Please enter a valid positive number.", {
+                reply_markup: backKeyboard,
+            });
             return;
         }
 
@@ -849,8 +850,9 @@ class TelegramBot {
         }
 
         if (!isValid) {
-            await ctx.reply(`❌ ${errorMessage}`);
-            reply_markup: backKeyboard,
+            await ctx.reply(`❌ ${errorMessage}`, {
+                reply_markup: backKeyboard,
+            });
             return;
         }
 
