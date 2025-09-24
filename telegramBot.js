@@ -807,6 +807,7 @@ class TelegramBot {
         const response = await conversation.waitFor(["message:text", "callback_query:data"]);
 
         if (response.callbackQuery?.data === "settings") {
+            await this.deleteMessage(ctx, promptMsg.message_id);
             return;
         }
 
