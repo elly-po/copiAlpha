@@ -807,8 +807,11 @@ class TelegramBot {
         const response = await conversation.waitFor(["message:text", "callback_query:data"]);
 
         if (response.callbackQuery?.data === "settings") {
-            await this.deleteMessage(ctx, promptMsg.message_id);
             return;
+        }
+        
+        if (response.message?.message_id) {
+            await this.deleteMessage(ctx, response.message.message_id);
         }
 
         const valueText = this.sanitizeInput(response.message?.text || '');
